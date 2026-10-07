@@ -117,6 +117,10 @@ targets:
         DEFINES_MODULE: YES
         MODULEMAP_FILE: $(SRCROOT)/module.modulemap
         CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES: YES
+        # Build the sources without Clang modules: lwIP's struct ip6_hdr etc.
+        # clash with the SDK's in the module cache ("incompatible definitions
+        # in different translation units"). Consumers still get the module.
+        CLANG_ENABLE_MODULES: NO
 
         # Distribution as an xcframework
         SKIP_INSTALL: NO
