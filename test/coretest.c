@@ -148,6 +148,8 @@ static void test_pre_start()
     // Previously dereferenced the (not yet created) core node and crashed
     CHECK(zts_init_set_low_bandwidth_mode(1) == ZTS_ERR_OK);
     CHECK(zts_init_set_low_bandwidth_mode(0) == ZTS_ERR_OK);
+    CHECK(zts_init_set_encrypted_hello(1) == ZTS_ERR_OK);
+    CHECK(zts_init_set_encrypted_hello(0) == ZTS_ERR_OK);
 
     // Queries that require a running node
     CHECK(zts_node_is_online() == 0);
@@ -275,10 +277,15 @@ static void test_sign_root_set()
 /**
  * Start a node whose only root is a local UDP socket and verify that the node
  * really uses the custom root set by inspecting the HELLO it sends.
+ *
+ * With encrypted HELLO (new in 1.16) everything after the packet header is
+ * encrypted to the root's public key, so only the header can be checked.
  */
-static uint64_t test_custom_roots_hello()
+static ssize_t plain_hello_len = 0;
+
+static uint64_t test_custom_roots_hello(int encrypted_hello)
 {
-    TEST_BEGIN("test_custom_roots_hello");
+    TEST_BEGIN(encrypted_hello ? "test_custom_roots_hello (encrypted)" : "test_custom_roots_hello");
 
     char local_ip[INET_ADDRSTRLEN] = { 0 };
     int have_local_ip = test_find_local_ipv4(local_ip, sizeof(local_ip));
@@ -322,6 +329,7 @@ static uint64_t test_custom_roots_hello()
     char storage[1024] = { 0 };
     node_path(storage, sizeof(storage), "node1");
     REQUIRE(zts_init_set_low_bandwidth_mode(1) == ZTS_ERR_OK);
+    REQUIRE(zts_init_set_encrypted_hello(encrypted_hello) == ZTS_ERR_OK);
     start_node(storage, NULL, roots, roots_len);
 
     uint64_t node_id = zts_node_get_id();
@@ -349,6 +357,7 @@ static uint64_t test_custom_roots_hello()
 
     // Settings can no longer be changed
     CHECK(zts_init_set_low_bandwidth_mode(0) == ZTS_ERR_SERVICE);
+    CHECK(zts_init_set_encrypted_hello(! encrypted_hello) == ZTS_ERR_SERVICE);
     CHECK(zts_init_set_roots(roots, roots_len) == ZTS_ERR_SERVICE);
 
     // Wait for a HELLO addressed to our fake root
@@ -357,14 +366,34 @@ static uint64_t test_custom_roots_hello()
     long long deadline = test_now_ms() + (have_local_ip ? 30000 : 0);
     while (! got_hello && test_now_ms() < deadline) {
         ssize_t n = recv(fake_root, pkt, sizeof(pkt), 0);
+        // Header: IV (8), destination (5), source (5), flags (1), MAC (8),
+        // verb (1)
+        if (n < 28 || read_addr40(pkt + 8) != root_id
+            || read_addr40(pkt + 13) != node_id) {
+            continue;
+        }
+        if (encrypted_hello) {
+            // Extended armor flag. The verb is encrypted so the root is only
+            // ever sent HELLOs before it answers.
+            got_hello = 1;
+            CHECK((pkt[18] & 0x80) != 0);
+            // Cipher suite: Poly1305 without payload encryption, the extended
+            // armor provides confidentiality
+            CHECK(((pkt[18] >> 3) & 0x07) == 0);
+            // Same HELLO as before plus the ephemeral public key (C25519)
+            if (plain_hello_len > 0) {
+                CHECK(n == plain_hello_len + 32);
+            }
+            continue;
+        }
         // header (28) + proto/version (5) + timestamp (8) + identity address
         // and type (6)
         if (n < 47 || (pkt[27] & 0x1f) != 0x01) {
             continue;
         }
         got_hello = 1;
-        CHECK(read_addr40(pkt + 8) == root_id);    // destination
-        CHECK(read_addr40(pkt + 13) == node_id);   // source
+        plain_hello_len = n;
+        CHECK((pkt[18] & 0x80) == 0);              // no extended armor
         CHECK(pkt[28] >= 11);                      // protocol version
         CHECK(pkt[29] == ZEROTIER_ONE_VERSION_MAJOR);
         CHECK(pkt[30] == ZEROTIER_ONE_VERSION_MINOR);
@@ -639,7 +668,9 @@ int main(int argc, char** argv)
     test_pre_start();
     test_identity_and_addressing();
     test_sign_root_set();
-    uint64_t node_id = test_custom_roots_hello();
+    uint64_t node_id = test_custom_roots_hello(0);
+    // Same storage, so the same identity
+    CHECK(test_custom_roots_hello(1) == node_id);
     test_identity_persistence(node_id);
     test_adhoc_networks();
 

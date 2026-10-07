@@ -126,6 +126,35 @@ public class ZeroTierNode {
     }
 
     /**
+     * (Optional) Enable or disable low-bandwidth mode, which sends less ambient
+     * traffic at the expense of responsiveness to network changes. Note that
+     * this is an initialization method that can only be called before
+     * {@code start()}.
+     *
+     * @param enabled Whether low-bandwidth mode is enabled
+     *
+     * @return return
+     */
+    public int initSetLowBandwidthMode(boolean enabled)
+    {
+        return ZeroTierNative.zts_init_set_low_bandwidth_mode(enabled ? 1 : 0);
+    }
+
+    /**
+     * (Optional) Enable or disable encrypted HELLO packets. Peers older than
+     * ZeroTier 1.16 cannot read them. Note that this is an initialization
+     * method that can only be called before {@code start()}.
+     *
+     * @param enabled Whether encrypted HELLO is enabled
+     *
+     * @return return
+     */
+    public int initSetEncryptedHello(boolean enabled)
+    {
+        return ZeroTierNative.zts_init_set_encrypted_hello(enabled ? 1 : 0);
+    }
+
+    /**
      * (Optional) Set the event handler function. Note that this is an
      * initialization method that can only be called before {@code start()}.
      *

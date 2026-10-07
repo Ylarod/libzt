@@ -254,6 +254,7 @@ class NodeService {
 
     /** Applied to ZT_Node_Config when the node is created */
     bool _lowBandwidthMode;
+    bool _encryptedHello;
 
     uint8_t _allowNetworkCaching;
     uint8_t _allowPeerCaching;
@@ -459,6 +460,9 @@ class NodeService {
 
     /** Enable or disable low-bandwidth mode (sends less ambient traffic, network updates happen less frequently) */
     int setLowBandwidthMode(bool enabled);
+
+    /** Enable or disable encrypted HELLO packets (hides the identity and version from observers) */
+    int setEncryptedHello(bool enabled);
 
     /** Add Interface prefix to blacklist (prevents ZeroTier from using that interface) */
     int addInterfacePrefixToBlacklist(const char* prefix, unsigned int len);

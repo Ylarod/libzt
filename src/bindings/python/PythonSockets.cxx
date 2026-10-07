@@ -38,63 +38,174 @@
 #include "lwip/sockets.h"
 #include "structmember.h"   // PyMemberDef
 
+#include <math.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
 
 PyObject* set_error(void)
 {
     return NULL;   // PyErr_SetFromErrno(zts_errno);
 }
 
+/*
+ * Timekeeping
+ *
+ * The CPython private _PyTime_* API previously used here was removed from the
+ * public headers in Python 3.13, so use our own nanosecond clock instead.
+ */
+
+static int64_t zts_py_monotonic_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+/* Convert a timeout in seconds (int or float) to nanoseconds, rounding up.
+   Returns -1 and sets the Python exception on error. */
+static int zts_py_timeout_from_object(PyObject* obj, int64_t* ns)
+{
+    double secs = PyFloat_AsDouble(obj);
+    if (secs == -1.0 && PyErr_Occurred()) {
+        if (PyErr_ExceptionMatches(PyExc_TypeError)) {
+            PyErr_SetString(PyExc_TypeError, "timeout must be a float or None");
+        }
+        return -1;
+    }
+    if (isnan(secs)) {
+        PyErr_SetString(PyExc_ValueError, "Invalid value NaN (not a number)");
+        return -1;
+    }
+    if (secs < 0) {
+        PyErr_SetString(PyExc_ValueError, "timeout must be non-negative");
+        return -1;
+    }
+    if (secs > (double)(INT64_MAX / 1000000000)) {
+        PyErr_SetString(PyExc_OverflowError, "timeout doesn't fit into C timeval");
+        return -1;
+    }
+    *ns = (int64_t)ceil(secs * 1e9);
+    return 0;
+}
+
+/* Read SO_RCVTIMEO or SO_SNDTIMEO in nanoseconds (0 means no timeout).
+   zts_get_recv_timeout() and zts_get_send_timeout() only report whole
+   seconds, so query the option directly. */
+static int zts_py_get_timeout_ns(int fd, int optname, int64_t* ns)
+{
+    struct timeval tv;
+    memset(&tv, 0, sizeof(tv));
+    zts_socklen_t optlen = sizeof(tv);
+    int res = zts_bsd_getsockopt(fd, ZTS_SOL_SOCKET, optname, (void*)&tv, &optlen);
+    if (res < 0) {
+        return res;
+    }
+    *ns = (int64_t)tv.tv_sec * 1000000000 + (int64_t)tv.tv_usec * 1000;
+    return ZTS_ERR_OK;
+}
+
+static int zts_py_set_timeout_ns(int fd, int optname, int64_t ns)
+{
+    struct timeval tv;
+    memset(&tv, 0, sizeof(tv));
+    int64_t us = (ns + 999) / 1000;
+    tv.tv_sec = (time_t)(us / 1000000);
+    tv.tv_usec = (suseconds_t)(us % 1000000);
+    return zts_bsd_setsockopt(fd, ZTS_SOL_SOCKET, optname, (void*)&tv, sizeof(tv));
+}
+
+/* Convert nanoseconds to a timeval, rounding up to the next microsecond */
+static void zts_py_ns_to_timeval(int64_t ns, struct zts_timeval* tv)
+{
+    int64_t us = (ns + 999) / 1000;
+    tv->tv_sec = (long)(us / 1000000);
+    tv->tv_usec = (long)(us % 1000000);
+}
+
+/* Convert (host, port) for ZTS_AF_INET or (host, port[, flowinfo[, scope_id]])
+   for ZTS_AF_INET6 into a socket address. Note: the family is a ZTS_AF_*
+   constant, which differs from the host's AF_INET6 on some platforms. */
 static int zts_py_tuple_to_sockaddr(int family, PyObject* addr_obj, struct zts_sockaddr* dst_addr, int* addrlen)
 {
-    if (family == AF_INET) {
-        struct zts_sockaddr_in* addr;
-        char* host_str;
-        int result, port;
-        if (! PyTuple_Check(addr_obj)) {
-            return ZTS_ERR_ARG;
-        }
+    char* host_str = NULL;
+    int result, port;
+    if (! PyTuple_Check(addr_obj)) {
+        return ZTS_ERR_ARG;
+    }
+    if (family == ZTS_AF_INET) {
+        struct zts_sockaddr_in* addr = (struct zts_sockaddr_in*)dst_addr;
         if (! PyArg_ParseTuple(addr_obj, "eti:zts_py_tuple_to_sockaddr", "idna", &host_str, &port)) {
+            PyErr_Clear();
             return ZTS_ERR_ARG;
         }
-        addr = (struct zts_sockaddr_in*)dst_addr;
-        result = zts_inet_pton(ZTS_AF_INET, host_str, &(addr->sin_addr.s_addr));
+        memset(addr, 0, sizeof(*addr));
+        result = zts_inet_pton(ZTS_AF_INET, host_str, &(addr->sin_addr));
         PyMem_Free(host_str);
-        if (port < 0 || port > 0xFFFF) {
+        if (port < 0 || port > 0xFFFF || result != 1) {
             return ZTS_ERR_ARG;
         }
-        if (result < 0) {
-            return ZTS_ERR_ARG;
-        }
-        addr->sin_family = AF_INET;
-        addr->sin_port = lwip_htons((short)port);
-        *addrlen = sizeof *addr;
+        addr->sin_len = sizeof(*addr);
+        addr->sin_family = ZTS_AF_INET;
+        addr->sin_port = lwip_htons((unsigned short)port);
+        *addrlen = sizeof(*addr);
         return ZTS_ERR_OK;
     }
-    if (family == AF_INET6) {
-        // TODO
+    if (family == ZTS_AF_INET6) {
+        struct zts_sockaddr_in6* addr = (struct zts_sockaddr_in6*)dst_addr;
+        unsigned int flowinfo = 0, scope_id = 0;
+        if (! PyArg_ParseTuple(
+                addr_obj,
+                "eti|II:zts_py_tuple_to_sockaddr",
+                "idna",
+                &host_str,
+                &port,
+                &flowinfo,
+                &scope_id)) {
+            PyErr_Clear();
+            return ZTS_ERR_ARG;
+        }
+        memset(addr, 0, sizeof(*addr));
+        result = zts_inet_pton(ZTS_AF_INET6, host_str, &(addr->sin6_addr));
+        PyMem_Free(host_str);
+        if (port < 0 || port > 0xFFFF || result != 1) {
+            return ZTS_ERR_ARG;
+        }
+        addr->sin6_len = sizeof(*addr);
+        addr->sin6_family = ZTS_AF_INET6;
+        addr->sin6_port = lwip_htons((unsigned short)port);
+        addr->sin6_flowinfo = lwip_htonl(flowinfo);
+        addr->sin6_scope_id = scope_id;
+        *addrlen = sizeof(*addr);
+        return ZTS_ERR_OK;
     }
     return ZTS_ERR_ARG;
 }
 
+/* Returns (fd, host, port) */
 PyObject* zts_py_accept(int fd)
 {
-    struct zts_sockaddr_in addrbuf = { 0 };
-    socklen_t addrlen = sizeof(addrbuf);
+    struct zts_sockaddr_storage addrbuf;
+    memset(&addrbuf, 0, sizeof(addrbuf));
+    zts_socklen_t addrlen = sizeof(addrbuf);
     int err = ZTS_ERR_OK;
     Py_BEGIN_ALLOW_THREADS;
     err = zts_bsd_accept(fd, (struct zts_sockaddr*)&addrbuf, &addrlen);
     Py_END_ALLOW_THREADS;
-    char ipstr[ZTS_INET_ADDRSTRLEN] = { 0 };
-    zts_inet_ntop(ZTS_AF_INET, &(addrbuf.sin_addr), ipstr, ZTS_INET_ADDRSTRLEN);
-    PyObject* t;
-    t = PyTuple_New(3);
-    PyTuple_SetItem(t, 0, PyLong_FromLong(err));   // New file descriptor
-    PyTuple_SetItem(t, 1, PyUnicode_FromString(ipstr));
-    PyTuple_SetItem(t, 2, PyLong_FromLong(lwip_ntohs(addrbuf.sin_port)));
-    Py_INCREF(t);
-    return t;
+    char ipstr[ZTS_INET6_ADDRSTRLEN] = { 0 };
+    int port = 0;
+    if (addrbuf.ss_family == ZTS_AF_INET6) {
+        struct zts_sockaddr_in6* in6 = (struct zts_sockaddr_in6*)&addrbuf;
+        zts_inet_ntop(ZTS_AF_INET6, &(in6->sin6_addr), ipstr, sizeof(ipstr));
+        port = lwip_ntohs(in6->sin6_port);
+    }
+    else if (addrbuf.ss_family == ZTS_AF_INET) {
+        struct zts_sockaddr_in* in4 = (struct zts_sockaddr_in*)&addrbuf;
+        zts_inet_ntop(ZTS_AF_INET, &(in4->sin_addr), ipstr, sizeof(ipstr));
+        port = lwip_ntohs(in4->sin_port);
+    }
+    return Py_BuildValue("(isi)", err, ipstr, port);
 }
 
 int zts_py_bind(int fd, int family, int type, PyObject* addr_obj)
@@ -127,7 +238,7 @@ int zts_py_connect(int fd, int family, int type, PyObject* addr_obj)
 
 PyObject* zts_py_recv(int fd, int len, int flags)
 {
-    PyObject *t, *buf;
+    PyObject* buf;
     int bytes_read;
 
     buf = PyBytes_FromStringAndSize((char*)0, len);
@@ -138,24 +249,16 @@ PyObject* zts_py_recv(int fd, int len, int flags)
     Py_BEGIN_ALLOW_THREADS;
     bytes_read = zts_bsd_recv(fd, PyBytes_AS_STRING(buf), len, flags);
     Py_END_ALLOW_THREADS;
-    t = PyTuple_New(2);
-    PyTuple_SetItem(t, 0, PyLong_FromLong(bytes_read));
 
     if (bytes_read < 0) {
         Py_DECREF(buf);
-        Py_INCREF(Py_None);
-        PyTuple_SetItem(t, 1, Py_None);
-        Py_INCREF(t);
-        return t;
+        return Py_BuildValue("(iO)", bytes_read, Py_None);
     }
-
-    if (bytes_read != len) {
-        _PyBytes_Resize(&buf, bytes_read);
+    if (bytes_read != len && _PyBytes_Resize(&buf, bytes_read) < 0) {
+        return NULL;
     }
-
-    PyTuple_SetItem(t, 1, buf);
-    Py_INCREF(t);
-    return t;
+    // "N" steals the reference to buf
+    return Py_BuildValue("(iN)", bytes_read, buf);
 }
 
 int zts_py_send(int fd, PyObject* buf, int flags)
@@ -185,9 +288,9 @@ int zts_py_sendall(int fd, PyObject* bytes, int flags)
     int has_timeout;
     int deadline_initialized = 0;
 
-    _PyTime_t timeout;  // Timeout duration
-    _PyTime_t interval;  // Time remaining until deadline
-    _PyTime_t deadline;  // System clock deadline for timeout
+    int64_t timeout;    // Timeout duration (ns)
+    int64_t interval;   // Time remaining until deadline (ns)
+    int64_t deadline = 0;   // Monotonic clock deadline for timeout (ns)
 
     if (PyObject_GetBuffer(bytes, &output, PyBUF_SIMPLE) != 0) {
         // BufferError has been raised. No need to set our own error.
@@ -198,11 +301,10 @@ int zts_py_sendall(int fd, PyObject* bytes, int flags)
     buf = (char *) output.buf;
     bytes_left = output.len;
 
-    res = zts_get_send_timeout(fd);
+    res = zts_py_get_timeout_ns(fd, ZTS_SO_SNDTIMEO, &timeout);
     if (res < 0)
         goto done;
 
-    timeout = (_PyTime_t) 1000 * 1000 * (int64_t) res; // Convert ms to ns
     interval = timeout;
     has_timeout = (interval > 0);
 
@@ -212,10 +314,10 @@ int zts_py_sendall(int fd, PyObject* bytes, int flags)
     do {
         if (has_timeout) {
             if (deadline_initialized) {
-                interval = deadline - _PyTime_GetMonotonicClock();
+                interval = deadline - zts_py_monotonic_ns();
             } else {
                 deadline_initialized = 1;
-                deadline = _PyTime_GetMonotonicClock() + timeout;
+                deadline = zts_py_monotonic_ns() + timeout;
             }
 
             if (interval <= 0) {
@@ -358,7 +460,7 @@ int seq2set(PyObject* seq, zts_fd_set* set, pylist fd2obj[FD_SETSIZE + 1])
 #if defined(_MSC_VER)
         max = 0; /* not used for Win32 */
 #else            /* !_MSC_VER */
-        if (! _PyIsSelectable_fd(v)) {
+        if (v < 0 || v >= ZTS_FD_SETSIZE) {
             PyErr_SetString(PyExc_ValueError, "filedescriptor out of range in select()");
             goto finally;
         }
@@ -394,33 +496,19 @@ PyObject* zts_py_select(PyObject* module, PyObject* rlist, PyObject* wlist, PyOb
     pylist efd2obj[FD_SETSIZE + 1];
     PyObject* ret = NULL;
     zts_fd_set ifdset, ofdset, efdset;
-    struct timeval tv, *tvp;
+    struct zts_timeval tv, *tvp;
     int imax, omax, emax, max;
     int n;
-    _PyTime_t timeout, deadline = 0;
+    int64_t timeout = 0, deadline = 0;
 
     if (timeout_obj == Py_None) {
-        tvp = (struct timeval*)NULL;
+        tvp = (struct zts_timeval*)NULL;
     }
     else {
-#if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION <= 5
-        _PyTime_round_t roundingMode = _PyTime_ROUND_CEILING;
-#else
-        _PyTime_round_t roundingMode = _PyTime_ROUND_UP;
-#endif
-        if (_PyTime_FromSecondsObject(&timeout, timeout_obj, roundingMode) < 0) {
-            if (PyErr_ExceptionMatches(PyExc_TypeError)) {
-                PyErr_SetString(PyExc_TypeError, "timeout must be a float or None");
-            }
+        if (zts_py_timeout_from_object(timeout_obj, &timeout) < 0) {
             return NULL;
         }
-        if (_PyTime_AsTimeval(timeout, &tv, roundingMode) == -1) {
-            return NULL;
-        }
-        if (tv.tv_sec < 0) {
-            PyErr_SetString(PyExc_ValueError, "timeout must be non-negative");
-            return NULL;
-        }
+        zts_py_ns_to_timeval(timeout, &tv);
         tvp = &tv;
     }
     /* Convert iterables to zts_fd_sets, and get maximum fd number
@@ -447,20 +535,20 @@ PyObject* zts_py_select(PyObject* module, PyObject* rlist, PyObject* wlist, PyOb
         max = emax;
     }
     if (tvp) {
-        deadline = _PyTime_GetMonotonicClock() + timeout;
+        deadline = zts_py_monotonic_ns() + timeout;
     }
 
     do {
+        int err = 0;
         Py_BEGIN_ALLOW_THREADS;
-        errno = 0;
-        // struct zts_timeval zts_tvp;
-        // zts_tvp.tv_sec = tvp.tv_sec;
-        // zts_tvp.tv_sec = tvp.tv_sec;
-
-        n = zts_bsd_select(max, &ifdset, &ofdset, &efdset, (struct zts_timeval*)tvp);
+        n = zts_bsd_select(max, &ifdset, &ofdset, &efdset, tvp);
+        err = (n < 0) ? zts_errno : 0;
         Py_END_ALLOW_THREADS;
 
-        if (errno != EINTR) {
+        if (err != ZTS_EINTR) {
+            if (n < 0) {
+                errno = err;
+            }
             break;
         }
 
@@ -470,7 +558,7 @@ PyObject* zts_py_select(PyObject* module, PyObject* rlist, PyObject* wlist, PyOb
         }
 
         if (tvp) {
-            timeout = deadline - _PyTime_GetMonotonicClock();
+            timeout = deadline - zts_py_monotonic_ns();
             if (timeout < 0) {
                 /* bpo-35310: lists were unmodified -- clear them explicitly */
                 ZTS_FD_ZERO(&ifdset);
@@ -479,7 +567,7 @@ PyObject* zts_py_select(PyObject* module, PyObject* rlist, PyObject* wlist, PyOb
                 n = 0;
                 break;
             }
-            _PyTime_AsTimeval_noraise(timeout, &tv, _PyTime_ROUND_CEILING);
+            zts_py_ns_to_timeval(timeout, &tv);
             /* retry select() with the recomputed timeout */
         }
     } while (1);
@@ -568,88 +656,53 @@ done:
 int zts_py_settimeout(int fd, PyObject* value)
 {
     int res;
+    int64_t timeout = 0;
 
-    // If None, set blocking mode
-    if (value == Py_None) {
-        res = zts_set_blocking(fd, true);
-        return res;
+    // None: blocking mode without timeout
+    if (value != Py_None) {
+        if (zts_py_timeout_from_object(value, &timeout) < 0) {
+            // Report an argument error, not a Python exception, to the caller
+            PyErr_Clear();
+            return ZTS_ERR_ARG;
+        }
     }
 
-    double double_val = PyFloat_AsDouble(value);
-
-    // If negative, throw an error
-    if (double_val < 0.) {
-        return ZTS_ERR_ARG;
-    }
-
-    // Set non-blocking mode
-    res = zts_set_blocking(fd, false);
+    // Zero: non-blocking mode. Otherwise operations block for up to the
+    // timeout (SO_RCVTIMEO/SO_SNDTIMEO are ignored by non-blocking sockets)
+    res = zts_set_blocking(fd, value == Py_None || timeout > 0);
     if (res < 0) {
         return res;
     }
-
-    // Calculate timeout secs/microseconds
-    int total_micros = (int) floor(double_val * 1e6);
-    div_t div_res = div(total_micros, 1000);
-
-    int secs = div_res.quot;
-    int micros = div_res.rem;
-
-    // Set both send and recv timeouts
-    res = zts_set_send_timeout(fd, secs, micros);
+    res = zts_py_set_timeout_ns(fd, ZTS_SO_SNDTIMEO, timeout);
     if (res < 0) {
         return res;
     }
-    res = zts_set_recv_timeout(fd, secs, micros);
-    return res;
+    return zts_py_set_timeout_ns(fd, ZTS_SO_RCVTIMEO, timeout);
 }
 
 PyObject* zts_py_gettimeout(int fd)
 {
-    PyObject *t;
-    int res;
+    int64_t timeout = 0;
+    int res = zts_get_blocking(fd);
 
-    t = PyTuple_New(2);
-
-    res = zts_get_blocking(fd);
-
-    // If err, return (err, None)
+    // Non-blocking mode: (0, 0.0)
+    if (res == 0) {
+        return Py_BuildValue("(id)", 0, 0.0);
+    }
+    if (res > 0) {
+        // Send and recv timeouts are always set together
+        res = zts_py_get_timeout_ns(fd, ZTS_SO_RCVTIMEO, &timeout);
+    }
+    // Error: (err, None)
     if (res < 0) {
-        PyTuple_SetItem(t, 0, PyLong_FromLong((long) res));
-        Py_INCREF(Py_None);
-        PyTuple_SetItem(t, 1, Py_None);
-        Py_INCREF(t);
-        return t;
+        return Py_BuildValue("(iO)", res, Py_None);
     }
-
-    // If socket in blocking mode, return (0, None)
-    if (res == 1) {
-        PyTuple_SetItem(t, 0, PyLong_FromLong(0L));
-        Py_INCREF(Py_None);
-        PyTuple_SetItem(t, 1, Py_None);
-        Py_INCREF(t);
-        return t;
+    // Blocking mode without timeout: (0, None)
+    if (timeout == 0) {
+        return Py_BuildValue("(iO)", 0, Py_None);
     }
-
-    // Send and recv timeouts should be equal
-    res = zts_get_recv_timeout(fd);
-
-    // If err, return (err, None)
-    if (res < 0) {
-        PyTuple_SetItem(t, 0, PyLong_FromLong((long) res));
-        Py_INCREF(Py_None);
-        PyTuple_SetItem(t, 1, Py_None);
-        Py_INCREF(t);
-        return t;
-    }
-
-    // Return (0, timeout)
-    // Result of zts_get_recv_timeout() is in milliseconds
-    double timeout = 1e-3 * (double) res;
-    PyTuple_SetItem(t, 0, PyLong_FromLong(0L));
-    PyTuple_SetItem(t, 1, PyFloat_FromDouble(timeout));
-    Py_INCREF(t);
-    return t;
+    // Blocking mode with timeout: (0, timeout in seconds)
+    return Py_BuildValue("(id)", 0, (double)timeout / 1e9);
 }
 
 PyObject* zts_py_getsockopt(int fd, PyObject* args)

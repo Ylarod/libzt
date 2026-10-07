@@ -1,0 +1,186 @@
+# XcodeGen spec for the libzt Apple framework (zt.framework)
+#
+# Generate the Xcode project with `xcodegen generate` in this directory (or
+# run ./build-xcframework.sh). The generated zt.xcodeproj is not checked in.
+#
+# The source set and flags mirror the non-Windows static library built by
+# ../../CMakeLists.txt. Keep both in sync when adding or removing files.
+
+name: zt
+
+options:
+  bundleIdPrefix: com.zerotier
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "12.0"
+    macOS: "10.15"
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+  zt:
+    type: framework
+    platform: auto
+    supportedDestinations: [iOS, macOS]
+    scheme: {}
+
+    sources:
+      # Public API (umbrella header of module.modulemap)
+      - path: ../../include/ZeroTierSockets.h
+        buildPhase: headers
+        headerVisibility: public
+        group: include
+
+      # libzt
+      - path: ../../src
+        includes: ["*.cpp"]
+        group: src
+
+      # ZeroTier core
+      - path: ../../ext/ZeroTierOne/node
+        includes: ["*.cpp"]
+        group: ZeroTierOne
+      - path: ../../ext/ZeroTierOne/osdep
+        includes: ["OSUtils.cpp", "PortMapper.cpp"]
+        group: ZeroTierOne
+
+      # NAT-PMP (wingettimeofday.c is Windows-only)
+      - path: ../../ext/ZeroTierOne/ext/libnatpmp
+        includes: ["natpmp.c", "getgateway.c"]
+        group: ZeroTierOne/ext
+        compilerFlags: ["-DNATPMP_EXPORTS"]
+
+      # miniupnpc, flags from the miniupnpc_obj target in CMakeLists.txt.
+      # CMake also defines MACOSX for macOS builds but no miniupnpc source
+      # tests it, so it is omitted here to keep one flag set for all SDKs.
+      - path: ../../ext/ZeroTierOne/ext/miniupnpc
+        includes:
+          - connecthostport.c
+          - igd_desc_parse.c
+          - minisoap.c
+          - minissdpc.c
+          - miniupnpc.c
+          - miniwget.c
+          - minixml.c
+          - portlistingparse.c
+          - receivedata.c
+          - upnpcommands.c
+          - upnpdev.c
+          - upnperrors.c
+          - upnpreplyparse.c
+        group: ZeroTierOne/ext
+        compilerFlags:
+          - "-DZT_USE_MINIUPNPC"
+          - "-DMINIUPNP_STATICLIB"
+          - "-D_DARWIN_C_SOURCE"
+          - "-DMINIUPNPC_SET_SOCKET_TIMEOUT"
+          - "-DMINIUPNPC_GET_SRC_ADDR"
+          - "-D_BSD_SOURCE"
+          - "-D_DEFAULT_SOURCE"
+          - '-DMINIUPNPC_VERSION_STRING=\"2.0\"'
+          - '-DUPNP_VERSION_STRING=\"UPnP/1.1\"'
+          - "-DENABLE_STRNATPMPERR"
+          - '-DOS_STRING=\"Darwin/15.0.0\"'
+
+      # lwIP (slipif.c is not used)
+      - path: ../../ext/lwip/src
+        includes:
+          - "api/*.c"
+          - "core/*.c"
+          - "core/ipv4/*.c"
+          - "core/ipv6/*.c"
+          - "netif/*.c"
+        excludes:
+          - "netif/slipif.c"
+        group: lwip
+        compilerFlags:
+          - "-DLWIP_DBG_TYPES_ON=0"
+          - "-Wno-tautological-constant-out-of-range-compare"
+          - "-Wno-parentheses-equality"
+      - path: ../../ext/lwip-contrib/ports/unix/port/sys_arch.c
+        group: lwip
+        compilerFlags:
+          - "-DLWIP_DBG_TYPES_ON=0"
+
+    settings:
+      base:
+        PRODUCT_NAME: zt
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerotier.zt
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.16.2"
+        CURRENT_PROJECT_VERSION: "1"
+
+        # Static framework with a Clang module
+        MACH_O_TYPE: staticlib
+        DEFINES_MODULE: YES
+        MODULEMAP_FILE: $(SRCROOT)/module.modulemap
+        CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES: YES
+
+        # Distribution as an xcframework
+        SKIP_INSTALL: NO
+        # build-xcframework.sh expects Products/Library/Frameworks/zt.framework
+        INSTALL_PATH: $(LOCAL_LIBRARY_DIR)/Frameworks
+        BUILD_LIBRARY_FOR_DISTRIBUTION: YES
+        ENABLE_BITCODE: NO
+        CODE_SIGNING_ALLOWED: NO
+        SUPPORTS_MACCATALYST: NO
+
+        # Same language mode as CMakeLists.txt
+        CLANG_CXX_LANGUAGE_STANDARD: c++11
+        CLANG_CXX_LIBRARY: libc++
+        GCC_C_LANGUAGE_STANDARD: gnu11
+
+        # lwIP and libzt have headers with clashing names (e.g. sockets.h),
+        # resolve includes through the search paths only
+        USE_HEADERMAP: NO
+        ALWAYS_SEARCH_USER_PATHS: NO
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/../../include
+          - $(SRCROOT)/../../src
+          - $(SRCROOT)/../../ext/concurrentqueue
+          - $(SRCROOT)/../../ext/lwip/src/include
+          - $(SRCROOT)/../../ext/lwip-contrib/ports/unix/port/include
+          - $(SRCROOT)/../../ext/ZeroTierOne
+          - $(SRCROOT)/../../ext/ZeroTierOne/include
+          - $(SRCROOT)/../../ext/ZeroTierOne/node
+          - $(SRCROOT)/../../ext/ZeroTierOne/osdep
+          - $(SRCROOT)/../../ext/ZeroTierOne/ext/libnatpmp
+          - $(SRCROOT)/../../ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include
+          - $(SRCROOT)/../../ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/simpleapi/include
+
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - $(inherited)
+          - ZT_SDK=1
+          - ZT_USE_MINIUPNPC=1
+          - _USING_LWIP_DEFINITIONS_=0
+          - OMIT_JSON_SUPPORT=1
+          - ZTS_DISABLE_CENTRAL_API=1
+
+        OTHER_CFLAGS:
+          - $(inherited)
+          - -fstack-protector
+          - -Wno-unused-parameter
+          - -Wno-format
+          - -Wno-macro-redefined
+          - -Wno-nullability-completeness
+          - -Wno-sign-compare
+          - -Wno-missing-field-initializers
+          - -Wno-expansion-to-defined
+        OTHER_CPLUSPLUSFLAGS:
+          - $(OTHER_CFLAGS)
+      configs:
+        Debug:
+          GCC_PREPROCESSOR_DEFINITIONS:
+            - $(inherited)
+            - ZT_SDK=1
+            - ZT_USE_MINIUPNPC=1
+            - _USING_LWIP_DEFINITIONS_=0
+            - OMIT_JSON_SUPPORT=1
+            - ZTS_DISABLE_CENTRAL_API=1
+            - LWIP_DEBUG=1
+            - LIBZT_DEBUG=1
+        Release:
+          GCC_OPTIMIZATION_LEVEL: "3"
+          GCC_GENERATE_DEBUGGING_SYMBOLS: NO

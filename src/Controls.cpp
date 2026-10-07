@@ -160,6 +160,12 @@ int zts_init_set_low_bandwidth_mode(int enabled)
     return zts_service->setLowBandwidthMode(enabled);
 }
 
+int zts_init_set_encrypted_hello(int enabled)
+{
+    ACQUIRE_SERVICE_OFFLINE();
+    return zts_service->setEncryptedHello(enabled);
+}
+
 int zts_init_set_port(unsigned short port)
 {
     ACQUIRE_SERVICE_OFFLINE();

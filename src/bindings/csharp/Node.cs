@@ -135,6 +135,17 @@ namespace ZeroTier.Core
             return zts_init_allow_peer_cache(Convert.ToByte(allowed));
         }
 
+        public int InitSetLowBandwidthMode(bool enabled)
+        {
+            return zts_init_set_low_bandwidth_mode(Convert.ToByte(enabled));
+        }
+
+        /// <summary>Encrypt HELLO packets (peers older than ZeroTier 1.16 cannot read them)</summary>
+        public int InitSetEncryptedHello(bool enabled)
+        {
+            return zts_init_set_encrypted_hello(Convert.ToByte(enabled));
+        }
+
         void OnZeroTierEvent(IntPtr msgPtr)
         {
             zts_event_msg_t msg = (zts_event_msg_t)Marshal.PtrToStructure(msgPtr, typeof(zts_event_msg_t));
@@ -634,6 +645,12 @@ namespace ZeroTier.Core
 
         [DllImport("libzt", EntryPoint = "CSharp_zts_init_allow_port_mapping")]
         static extern int zts_init_allow_port_mapping(int arg1);
+
+        [DllImport("libzt", EntryPoint = "CSharp_zts_init_set_low_bandwidth_mode")]
+        static extern int zts_init_set_low_bandwidth_mode(int arg1);
+
+        [DllImport("libzt", EntryPoint = "CSharp_zts_init_set_encrypted_hello")]
+        static extern int zts_init_set_encrypted_hello(int arg1);
 
         // Core query API
 

@@ -527,6 +527,18 @@ Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1set_1port(JNIEnv* jenv, jcla
 }
 
 JNIEXPORT jint JNICALL
+Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1set_1low_1bandwidth_1mode(JNIEnv* jenv, jclass clazz, jint enabled)
+{
+    return zts_init_set_low_bandwidth_mode(enabled);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1set_1encrypted_1hello(JNIEnv* jenv, jclass clazz, jint enabled)
+{
+    return zts_init_set_encrypted_hello(enabled);
+}
+
+JNIEXPORT jint JNICALL
 Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1from_1memory(JNIEnv* jenv, jobject thisObj, char* key, int len)
 {
     return ZTS_ERR_OK;

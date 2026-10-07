@@ -437,6 +437,12 @@ typedef void (*CppCallback)(void* msg);
 /** 255.255.255.255 */
 #define ZTS_INADDR_BROADCAST ZTS_IPADDR_BROADCAST
 
+
+#define ZTS_IN6ADDR_ANY_INIT {{{0,0,0,0}}}
+
+
+
+
 // Socket protocol types
 #define ZTS_SOCK_STREAM 0x0001
 #define ZTS_SOCK_DGRAM  0x0002
@@ -502,6 +508,10 @@ struct zts_in6_addr {
     } un;
     //#define s6_addr  un.u8_addr
 };
+
+// static: a plain definition in a header breaks linking C programs that include
+// it from more than one translation unit (multiple definition)
+static const struct zts_in6_addr zts_in6addr_any = ZTS_IN6ADDR_ANY_INIT;
 
 /**
  * Address structure to specify an IPv4 endpoint
@@ -854,7 +864,12 @@ typedef struct {
     float unused_2;
     float unused_3;
     float unused_4;
-    uint64_t unused_5;
+
+    /**
+     * Local UDP port this path is bound to (occupies a former padding field,
+     * the structure layout is unchanged)
+     */
+    unsigned short local_port;
     uint64_t unused_6;
     float unused_7;
 
@@ -1023,7 +1038,7 @@ typedef struct {
 #ifndef ZTS_DISABLE_CENTRAL_API
 
 #define ZTS_CENTRAL_DEFAULT_URL         "https://my.zerotier.com"
-#define ZTS_CENRTAL_MAX_URL_LEN         128
+#define ZTS_CENTRAL_MAX_URL_LEN         128
 #define ZTS_CENTRAL_TOKEN_LEN           32
 #define ZTS_CENTRAL_RESP_BUF_DEFAULT_SZ (128 * 1024)
 
@@ -1227,7 +1242,7 @@ ZTS_API int ZTCALL zts_init_from_storage(const char* path);
  *
  * See also: `zts_init_from_storage()`
  *
- * @param key Path Null-terminated file-system path string
+ * @param key Buffer containing identity key
  * @param len Length of `key` buffer
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
@@ -1275,6 +1290,24 @@ ZTS_API int ZTCALL zts_init_set_event_handler(void (*callback)(void*));
 #endif
 
 /**
+ * @brief Set TCP relay for ZeroTier to use instead of P2P UDP
+ *
+ * @param tcp_relay_addr IP address of TCP relay
+ * @param tcp_relay_port Port of TCP relay
+ */
+ZTS_API int ZTCALL zts_init_set_tcp_relay(const char* tcp_relay_addr, unsigned short tcp_relay_port);
+
+/**
+ * @brief Allow TCP relay for ZeroTier to use instead of P2P UDP
+ */
+ZTS_API int ZTCALL zts_init_allow_tcp_relay(int enabled);
+
+/**
+ * @brief Force TCP relay for ZeroTier to use instead of P2P UDP
+ */
+ZTS_API int ZTCALL zts_init_force_tcp_relay(int enabled);
+
+/**
  * @brief Blacklist an interface prefix (or name). This prevents ZeroTier from
  * sending traffic over matching interfaces. This is an initialization function that can
  * only be called before `zts_node_start()`.
@@ -1296,6 +1329,38 @@ ZTS_API int ZTCALL zts_init_blacklist_if(const char* prefix, unsigned int len);
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
 ZTS_API int ZTCALL zts_init_set_roots(const void* roots_data, unsigned int len);
+
+/**
+ * @brief Enable or disable low-bandwidth mode. This is an initialization function that can
+ * only be called before `zts_node_start()`.
+ *
+ * Low-bandwidth mode reduces the ambient traffic that ZeroTier sends
+ * at the expense of responsiveness to network changes. It does not reduce your
+ * established connection speeds. It is an adjustment to multiple internal
+ * timers that results in fewer keepalive probes and network configuration
+ * requests being sent. This is a good option if your underlying physical network
+ * doesn't change much.
+ *
+ * @param enabled Whether low-bandwidth mode is enabled or not (default: false)
+ * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
+ *     experiences a problem.
+ */
+ZTS_API int ZTCALL zts_init_set_low_bandwidth_mode(int enabled);
+
+/**
+ * @brief Enable or disable encrypted HELLO packets. This is an initialization function that can
+ * only be called before `zts_node_start()`.
+ *
+ * HELLO packets are authenticated but normally sent in the clear, which reveals the node's
+ * identity and ZeroTier version to on-path observers. When enabled, HELLO packets are
+ * additionally encrypted with an ephemeral key ("extended armor"). Peers running ZeroTier
+ * versions older than 1.16 cannot read encrypted HELLO packets.
+ *
+ * @param enabled Whether encrypted HELLO is enabled or not (default: false)
+ * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
+ *     experiences a problem.
+ */
+ZTS_API int ZTCALL zts_init_set_encrypted_hello(int enabled);
 
 /**
  * @brief Set the port to which the node should bind. This is an initialization function that can
@@ -1325,7 +1390,7 @@ ZTS_API int ZTCALL zts_init_set_random_port_range(unsigned short start_port, uns
  * that traffic on your chosen primary port is allowed. This is an initialization function that can
  * only be called before `zts_node_start()`.
  *
- * @param port Port number
+ * @param allowed Whether or not this feature is enabled
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
@@ -1335,7 +1400,7 @@ ZTS_API int ZTCALL zts_init_allow_secondary_port(unsigned int allowed);
  * @brief Allow or disallow the use of port-mapping. This is enabled by default. This is an
  * initialization function that can only be called before `zts_node_start()`.
  *
- * @param port Port number
+ * @param allowed Whether or not this feature is enabled
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
@@ -1355,7 +1420,7 @@ ZTS_API int ZTCALL zts_init_allow_port_mapping(unsigned int allowed);
  *
  * See also: `zts_init_allow_peer_cache()`
  *
- * @param enabled Whether or not this feature is enabled
+ * @param allowed Whether or not this feature is enabled
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
@@ -1374,7 +1439,7 @@ ZTS_API int ZTCALL zts_init_allow_net_cache(unsigned int allowed);
  *
  * See also: `zts_init_allow_net_cache()`
  *
- * @param enabled Whether or not this feature is enabled
+ * @param allowed Whether or not this feature is enabled
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
@@ -1384,7 +1449,7 @@ ZTS_API int ZTCALL zts_init_allow_peer_cache(unsigned int allowed);
  * @brief Enable or disable whether the node will cache root definitions (enabled
  * by default when `zts_init_from_storage()` is used.) Must be called before `zts_node_start()`.
  *
- * @param enabled Whether or not this feature is enabled
+ * @param allowed Whether or not this feature is enabled
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
@@ -1394,7 +1459,7 @@ ZTS_API int ZTCALL zts_init_allow_roots_cache(unsigned int allowed);
  * @brief Enable or disable whether the node will cache identities (enabled
  * by default when `zts_init_from_storage()` is used.) Must be called before `zts_node_start()`.
  *
- * @param enabled Whether or not this feature is enabled
+ * @param allowed Whether or not this feature is enabled
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */

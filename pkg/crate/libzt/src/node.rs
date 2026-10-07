@@ -49,7 +49,7 @@ impl ZeroTierNode {
         unsafe {
             // This is a false-positive by the linter
             // See: https://github.com/rust-lang/rust/issues/78691
-            #[allow(temporary_cstring_as_ptr)]
+            #[allow(dangling_pointers_from_temporaries)]
             return zts_init_from_storage(CString::new(storage_path).unwrap().as_ptr());
         }
     }

@@ -144,6 +144,7 @@ class socket:
     _connected = False
     _closed = True
     _bound = False
+    _timeout = None  # seconds, None (blocking) or 0.0 (non-blocking)
 
     def __init__(self, sock_family=-1, sock_type=-1, sock_proto=-1, sock_fd=None):
         self._fd = sock_fd
@@ -154,6 +155,16 @@ class socket:
         # accepted a connection
         if sock_fd is None:
             self._fd = libzt.zts_bsd_socket(sock_family, sock_type, sock_proto)
+
+    def _handle_error(self, err):
+        """Like handle_error() but reports an expired timeout as TimeoutError"""
+        if (
+            err == libzt.ZTS_ERR_SOCKET
+            and self._timeout
+            and errno() == zts_errno.ZTS_EWOULDBLOCK
+        ):
+            raise TimeoutError("timed out")
+        handle_error(err)
 
     def has_dualstack_ipv6(self):
         """Return whether libzt supports dual stack sockets: yes"""
@@ -317,7 +328,7 @@ class socket:
         and port."""
         new_conn_fd, addr, port = libzt.zts_py_accept(self._fd)
         if new_conn_fd < 0:
-            handle_error(new_conn_fd)
+            self._handle_error(new_conn_fd)
             return None
         return socket(self._family, self._type, self._proto, new_conn_fd), addr
 
@@ -343,7 +354,7 @@ class socket:
         Connect the socket to a remote address"""
         err = libzt.zts_py_connect(self._fd, self._family, self._type, address)
         if err < 0:
-            handle_error(err)
+            self._handle_error(err)
 
     def connect_ex(self, address):
         """connect_ex(address) -> errno
@@ -393,10 +404,6 @@ class socket:
         """Get a socket option value"""
         return libzt.zts_py_getsockopt(self._fd, (level, optname))
 
-    def gettimeout(self):
-        """libzt does not support this (yet)"""
-        raise NotImplementedError("libzt does not support this (yet?)")
-
     def ioctl(self, request, arg=0, mutate_flag=True):
         """Perform I/O control operations"""
         return libzt.zts_py_ioctl(self._fd, request, arg, mutate_flag)
@@ -435,7 +442,7 @@ class socket:
         """
         err, data = libzt.zts_py_recv(self._fd, n_bytes, flags)
         if err < 0:
-            handle_error(err)
+            self._handle_error(err)
             return None
         return data
 
@@ -472,7 +479,7 @@ class socket:
         """
         err = libzt.zts_py_send(self._fd, data, flags)
         if err < 0:
-            handle_error(err)
+            self._handle_error(err)
         return err
 
     def sendall(self, bytes, flags=0):
@@ -491,7 +498,7 @@ class socket:
         """
         err = libzt.zts_py_sendall(self._fd, bytes, flags)
         if err < 0:
-            handle_error(err)
+            self._handle_error(err)
 
     def sendto(self, n_bytes, flags, address):
         """libzt does not support this (yet)"""
@@ -526,6 +533,7 @@ class socket:
 
         Sets the socket to blocking mode if flag=True, non-blocking if flag=False."""
         libzt.zts_set_blocking(self._fd, flag)
+        self._timeout = None if flag else 0.0
 
     def settimeout(self, value):
         """
@@ -543,6 +551,7 @@ class socket:
         err = libzt.zts_py_settimeout(self._fd, value)
         if err < 0:
             handle_error(err)
+        self._timeout = None if value is None else float(value)
 
     def gettimeout(self):
         """

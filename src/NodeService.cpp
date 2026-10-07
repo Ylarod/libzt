@@ -191,6 +191,7 @@ NodeService::NodeService()
 #endif
     , _allowSecondaryPort(true)
     , _lowBandwidthMode(false)
+    , _encryptedHello(false)
     , _allowNetworkCaching(true)
     , _allowPeerCaching(true)
     , _allowIdentityCaching(true)
@@ -252,7 +253,7 @@ NodeService::ReasonForTermination NodeService::run()
             cb.pathCheckFunction = SnodePathCheckFunction;
             cb.pathLookupFunction = SnodePathLookupFunction;
             struct ZT_Node_Config config;
-            config.enableEncryptedHello = 0;
+            config.enableEncryptedHello = _encryptedHello ? 1 : 0;
             config.lowBandwidthMode = _lowBandwidthMode ? 1 : 0;
             _node = new Node(this, (void*)0, &config, &cb, OSUtils::now());
         }
@@ -1125,6 +1126,13 @@ void NodeService::sendEventToUser(unsigned int zt_event_code, const void* obj, u
                 dst->last_rx = src->lastReceive;
                 dst->trusted_path_id = src->trustedPathId;
                 dst->latency = src->latencyMean;
+                // The core only fills in localPort for bonded paths
+                dst->local_port = src->localPort;
+                PhySocket* sock = (PhySocket*)((uintptr_t)src->localSocket);
+                if (! dst->local_port && src->localSocket != 0 && src->localSocket != (uint64_t)-1
+                    && _binder.isUdpSocketValid(sock)) {
+                    dst->local_port = Phy<NodeService*>::getLocalPort(sock);
+                }
                 // Points into the peer list which is freed after this call
                 dst->ifname = NULL;
                 dst->expired = src->expired;
@@ -2261,6 +2269,16 @@ int NodeService::setLowBandwidthMode(bool enabled)
     // The node does not exist until run() is called, so store the setting
     // and apply it via ZT_Node_Config when the node is created
     _lowBandwidthMode = enabled;
+    return ZTS_ERR_OK;
+}
+
+int NodeService::setEncryptedHello(bool enabled)
+{
+    Mutex::Lock _lr(_run_m);
+    if (_run) {
+        return ZTS_ERR_SERVICE;
+    }
+    _encryptedHello = enabled;
     return ZTS_ERR_OK;
 }
 

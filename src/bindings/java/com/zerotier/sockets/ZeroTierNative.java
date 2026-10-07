@@ -425,6 +425,8 @@ public class ZeroTierNative {
     public static native int zts_init_from_storage(String path);
     public static native int zts_init_set_event_handler(ZeroTierEventListener callbackClass);
     public static native int zts_init_set_port(short port);
+    public static native int zts_init_set_low_bandwidth_mode(int enabled);
+    public static native int zts_init_set_encrypted_hello(int enabled);
     // public static native int zts_init_from_memory(/*const*/ char* key,  int len);
     public static native int zts_init_blacklist_if(/*const*/ String prefix, int len);
     // public static native int zts_init_set_roots(/*const*/ void* roots_data,  int len);

@@ -509,7 +509,9 @@ struct zts_in6_addr {
     //#define s6_addr  un.u8_addr
 };
 
-const struct zts_in6_addr zts_in6addr_any = ZTS_IN6ADDR_ANY_INIT;
+// static: a plain definition in a header breaks linking C programs that include
+// it from more than one translation unit (multiple definition)
+static const struct zts_in6_addr zts_in6addr_any = ZTS_IN6ADDR_ANY_INIT;
 
 /**
  * Address structure to specify an IPv4 endpoint
@@ -862,7 +864,12 @@ typedef struct {
     float unused_2;
     float unused_3;
     float unused_4;
-    uint64_t unused_5;
+
+    /**
+     * Local UDP port this path is bound to (occupies a former padding field,
+     * the structure layout is unchanged)
+     */
+    unsigned short local_port;
     uint64_t unused_6;
     float unused_7;
 
@@ -1339,6 +1346,21 @@ ZTS_API int ZTCALL zts_init_set_roots(const void* roots_data, unsigned int len);
  *     experiences a problem.
  */
 ZTS_API int ZTCALL zts_init_set_low_bandwidth_mode(int enabled);
+
+/**
+ * @brief Enable or disable encrypted HELLO packets. This is an initialization function that can
+ * only be called before `zts_node_start()`.
+ *
+ * HELLO packets are authenticated but normally sent in the clear, which reveals the node's
+ * identity and ZeroTier version to on-path observers. When enabled, HELLO packets are
+ * additionally encrypted with an ephemeral key ("extended armor"). Peers running ZeroTier
+ * versions older than 1.16 cannot read encrypted HELLO packets.
+ *
+ * @param enabled Whether encrypted HELLO is enabled or not (default: false)
+ * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
+ *     experiences a problem.
+ */
+ZTS_API int ZTCALL zts_init_set_encrypted_hello(int enabled);
 
 /**
  * @brief Set the port to which the node should bind. This is an initialization function that can

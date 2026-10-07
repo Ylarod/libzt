@@ -14,7 +14,7 @@ Should result in something like:
 dist
 └── linux-x64-jar-release
     └── pkg
-        └── libzt-1.8.10.jar
+        └── libzt-1.16.2.jar
 ```
 
 Copy the JAR to the working directory:

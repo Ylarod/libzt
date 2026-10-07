@@ -47,7 +47,7 @@ impl UdpSocketImpl {
             // TODO: Handle native error code, consider cvt?
             // This is a false-positive by the linter
             // See: https://github.com/rust-lang/rust/issues/78691
-            #[allow(temporary_cstring_as_ptr)]
+            #[allow(dangling_pointers_from_temporaries)]
             zts_bind(
                 *socket.as_inner(),
                 CString::new(addr_str).unwrap().as_ptr(),
@@ -263,7 +263,7 @@ impl UdpSocketImpl {
             // TODO: Handle native error code, consider cvt?
             // This is a false-positive by the linter
             // See: https://github.com/rust-lang/rust/issues/78691
-            #[allow(temporary_cstring_as_ptr)]
+            #[allow(dangling_pointers_from_temporaries)]
             cvt(zts_connect(
                 *self.inner.as_inner(),
                 CString::new(addr_str).unwrap().as_ptr(),

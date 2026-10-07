@@ -406,10 +406,9 @@ host-python()
     TARGET_BUILD_DIR=$DEFAULT_HOST_BIN_OUTPUT_DIR-$ARTIFACT-$BUILD_TYPE
     PKG_OUTPUT_DIR=$TARGET_BUILD_DIR/pkg
     mkdir -p $PKG_OUTPUT_DIR
-    # Generate new wrapper
-    #swig -c++ -python -o src/bindings/python/zt_wrap.cxx -Iinclude src/bindings/python/zt.i
-    # Requires setuptools, etc
-    cd pkg/pypi && ./build.sh wheel && cp -f dist/*.whl $PKG_OUTPUT_DIR
+    # The SWIG wrapper is generated during the build (SWIG and setuptools are
+    # installed into an isolated build environment by pip)
+    cd pkg/pypi && $PYTHON -m pip wheel . -w dist && cp -f dist/*.whl $PKG_OUTPUT_DIR
     echo -e "\nFinished wheel:\n"
     echo $PKG_OUTPUT_DIR/*.whl
 
@@ -422,6 +421,8 @@ host-python()
         pip3 uninstall -y libzt
         pip3 install $PKG_OUTPUT_DIR/*.whl
         cd $libzt
+        # Hermetic test, needs no Internet access
+        $PYTHON test/offline.py || exit 1
         $PYTHON test/selftest.py server $alice_path $testnet $port4 &
         $PYTHON test/selftest.py client $bob_path $testnet $alice_ip4 $port4 &
     fi

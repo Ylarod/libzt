@@ -55,11 +55,17 @@ static uint64_t expected_peer;
 static atomic_int ev_node_online;
 static atomic_int ev_peer_direct;
 static zts_peer_info_t peer_info;
+static atomic_int node_ports[3];
 
 static void on_zts_event(void* ptr)
 {
     zts_event_msg_t* msg = (zts_event_msg_t*)ptr;
     switch (msg->event_code) {
+        case ZTS_EVENT_NODE_UP:
+            atomic_store(&node_ports[0], msg->node->port_primary);
+            atomic_store(&node_ports[1], msg->node->port_secondary);
+            atomic_store(&node_ports[2], msg->node->port_tertiary);
+            break;
         case ZTS_EVENT_NODE_ONLINE:
             atomic_store(&ev_node_online, 1);
             break;
@@ -187,11 +193,18 @@ check_peer_info(const char* name, int expected_role, int expected_port)
         zts_inet_ntop(ZTS_AF_INET, &in4->sin_addr, ipstr, sizeof(ipstr));
         int port = ntohs(in4->sin_port);
         printf(
-            "[%s]   path %s/%d last_rx %llu\n",
+            "[%s]   path %s/%d via local port %u last_rx %llu\n",
             name,
             ipstr,
             port,
+            p->local_port,
             (unsigned long long)p->last_rx);
+        // Every path goes through one of our own sockets
+        CHECK(
+            p->local_port != 0
+            && (p->local_port == atomic_load(&node_ports[0])
+                || p->local_port == atomic_load(&node_ports[1])
+                || p->local_port == atomic_load(&node_ports[2])));
         if (! strcmp(ipstr, local_ip)
             && (expected_port == 0 || port == expected_port)) {
             found_local_path = 1;

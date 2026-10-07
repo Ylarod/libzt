@@ -713,6 +713,16 @@ SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_allow_port_mapping(int allowed)
     return zts_init_allow_port_mapping(allowed);
 }
 
+SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_set_low_bandwidth_mode(int enabled)
+{
+    return zts_init_set_low_bandwidth_mode(enabled);
+}
+
+SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_set_encrypted_hello(int enabled)
+{
+    return zts_init_set_encrypted_hello(enabled);
+}
+
 SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_allow_net_cache(int jarg1)
 {
     int jresult;
