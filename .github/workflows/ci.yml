@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    # Version tags are built by release.yml
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
