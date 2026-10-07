@@ -40,6 +40,7 @@ static char work_dir[512] = { 0 };
 //----------------------------------------------------------------------------//
 
 static atomic_int ev_node_up;
+static atomic_int ev_node_down;
 static atomic_int ev_node_online;
 static atomic_int ev_net_ready_ip6;
 static atomic_int ev_addr_added_ip6;
@@ -57,6 +58,9 @@ static void on_zts_event(void* ptr)
         case ZTS_EVENT_NODE_ONLINE:
             atomic_store(&ev_node_online, 1);
             break;
+        case ZTS_EVENT_NODE_DOWN:
+            atomic_store(&ev_node_down, 1);
+            break;
         case ZTS_EVENT_NETWORK_READY_IP6:
             memcpy(&net_ready_info, msg->network, sizeof(net_ready_info));
             atomic_store(&ev_net_ready_ip6, 1);
@@ -72,6 +76,7 @@ static void on_zts_event(void* ptr)
 static void reset_events()
 {
     atomic_store(&ev_node_up, 0);
+    atomic_store(&ev_node_down, 0);
     atomic_store(&ev_node_online, 0);
     atomic_store(&ev_net_ready_ip6, 0);
     atomic_store(&ev_addr_added_ip6, 0);
@@ -461,6 +466,23 @@ static uint64_t test_custom_roots_hello(int encrypted_hello)
  * before the old service was torn down, so they could be applied to the dying
  * instance and lost.
  */
+#ifdef __linux__
+#include <dirent.h>
+static int thread_count()
+{
+    int n = 0;
+    DIR* d = opendir("/proc/self/task");
+    if (! d) {
+        return -1;
+    }
+    for (struct dirent* e = readdir(d); e; e = readdir(d)) {
+        n += e->d_name[0] != '.';
+    }
+    closedir(d);
+    return n;
+}
+#endif
+
 static void test_immediate_restart()
 {
     TEST_BEGIN("test_immediate_restart");
@@ -472,6 +494,9 @@ static void test_immediate_restart()
     unsigned int roots_len = 0;
     REQUIRE(test_make_roots(root_key, "192.0.2.1/9993", TEST_WORLD_ID, roots, &roots_len) == ZTS_ERR_OK);
 
+#ifdef __linux__
+    int threads_after_first_stop = 0;
+#endif
     for (int i = 0; i < 3; i++) {
         char key[ZTS_ID_STR_BUF_LEN] = { 0 };
         unsigned int key_len = ZTS_ID_STR_BUF_LEN;
@@ -480,6 +505,16 @@ static void test_immediate_restart()
         CHECK(zts_node_get_id() == test_id_from_key(key));
         CHECK(node_up_info.node_id == test_id_from_key(key));
         CHECK(zts_node_stop() == ZTS_ERR_OK);
+        // Delivered before zts_node_stop() returns (was never delivered)
+        CHECK(atomic_load(&ev_node_down));
+#ifdef __linux__
+        // The service and callback threads end with the node (every start
+        // used to leave another callback thread behind)
+        if (i == 0) {
+            threads_after_first_stop = thread_count();
+        }
+        CHECK(thread_count() == threads_after_first_stop);
+#endif
     }
     CHECK(zts_node_stop() == ZTS_ERR_SERVICE);
 }

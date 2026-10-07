@@ -258,7 +258,14 @@ def run_single(work_dir):
     check(s.gettimeout() is None, "blocking again")
     s.close()
 
-    node.node_stop()
+    # Returns once the node is down, ZTS_EVENT_NODE_DOWN has been delivered
+    # (this used to take 30s: the event handler waited for the GIL held by
+    # the caller)
+    t0 = time.monotonic()
+    check(node.node_stop() == libzt.ZTS_ERR_OK, "node_stop()")
+    elapsed = time.monotonic() - t0
+    check(elapsed < 5, "node_stop() took %.2fs" % elapsed)
+    check(events.got(libzt.ZTS_EVENT_NODE_DOWN), "ZTS_EVENT_NODE_DOWN")
     return summary("single")
 
 

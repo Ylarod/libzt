@@ -58,6 +58,9 @@ Mutex service_m;
 // Set from zts_node_start() until the service thread has completely torn down
 // the node (deleted the service and disabled events)
 static std::atomic<bool> service_thread_active(false);
+// Set from zts_node_start() until the callback thread has delivered the last
+// event of the session
+static std::atomic<bool> callback_thread_active(false);
 
 /**
  * Wait for the service thread to finish, so that zts_init_*() calls after
@@ -71,9 +74,19 @@ static void wait_for_service_thread()
     if (Events::isCallbackThread()) {
         return;
     }
-    for (int i = 0; i < 3000 && service_thread_active.load(); i++) {
+#ifdef ZTS_ENABLE_PYTHON
+    // Called from Python with the GIL held, which the callback thread needs to
+    // deliver the remaining events
+    PyThreadState* py_state = (Py_IsInitialized() && PyGILState_Check()) ? PyEval_SaveThread() : NULL;
+#endif
+    for (int i = 0; i < 3000 && (service_thread_active.load() || callback_thread_active.load()); i++) {
         zts_util_delay(10);
     }
+#ifdef ZTS_ENABLE_PYTHON
+    if (py_state) {
+        PyEval_RestoreThread(py_state);
+    }
+#endif
 }
 
 int init_subsystems()
@@ -362,6 +375,7 @@ void* cbRun(void* arg)
     // pthread_setname_np(ZTS_EVENT_CALLBACK_THREAD_NAME);
 #endif
     zts_events->run();
+    callback_thread_active = false;
     //#if ZTS_ENABLE_JAVA
     //    _java_detach_from_thread();
     // pthread_exit(0);
@@ -588,6 +602,11 @@ void* _runNodeService(void* arg)
         zts_util_delay(ZTS_CALLBACK_PROCESSING_INTERVAL * 2);
         if (zts_events) {
             zts_events->disable();
+            // Let the callback thread deliver what is queued (e.g.
+            // ZTS_EVENT_NODE_DOWN) and exit. It used to run until
+            // ZTS_EVENT_STACK_DOWN, which could never be queued with events
+            // disabled, so every zts_node_start() added another one.
+            zts_events->clrState(ZTS_STATE_CALLBACKS_RUNNING);
         }
         events_m.unlock();
     }
@@ -611,19 +630,29 @@ int zts_node_start()
         // Must be set before the thread starts since Events::run() exits as
         // soon as it observes this state cleared (with an empty queue)
         zts_events->setState(ZTS_STATE_CALLBACKS_RUNNING);
+        callback_thread_active = true;
 #if defined(__WINDOWS__)
         HANDLE callbackThread = CreateThread(NULL, 0, cbRun, NULL, 0, NULL);
-        // TODO: Check success
+        if (callbackThread == NULL) {
+            res = ZTS_ERR_GENERAL;
+        }
 #else
         pthread_t cbThread;
-        if ((res = pthread_create(&cbThread, NULL, cbRun, NULL)) != 0) {}
+        if ((res = pthread_create(&cbThread, NULL, cbRun, NULL)) != 0) {
+            res = ZTS_ERR_GENERAL;
+        }
+        else {
+            pthread_detach(cbThread);
+        }
 #endif
 #if defined(__linux__)
         // pthread_setname_np(cbThread, ZTS_EVENT_CALLBACK_THREAD_NAME);
 #endif
         if (res != ZTS_ERR_OK) {
+            callback_thread_active = false;
             zts_events->clrState(ZTS_STATE_CALLBACKS_RUNNING);
             zts_events->clrCallback();
+            res = ZTS_ERR_OK;   // Run without callbacks
         }
     }
     // Start ZeroTier service

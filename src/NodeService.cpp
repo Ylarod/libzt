@@ -211,7 +211,9 @@ NodeService::NodeService()
  * The core's global prometheus saver thread runs from static initialization on
  * and wakes up every 1/100 of its period (1s by default, i.e. 100 times per
  * second) even when metrics are disabled. When disabled, lengthen the period to
- * save power; destroying the saver at exit then waits up to 300ms.
+ * save power. Destroying the saver at exit waits for up to one wakeup interval,
+ * keep that short (100ms) since other threads may still run if the node was not
+ * stopped.
  */
 void NodeService::configureMetrics(bool enabled, const std::string& homePath)
 {
@@ -223,7 +225,7 @@ void NodeService::configureMetrics(bool enabled, const std::string& homePath)
     else {
         std::shared_ptr<prometheus::Registry> none;
         prometheus::simpleapi::saver.set_registry(none);
-        prometheus::simpleapi::saver.set_delay(std::chrono::seconds(30));
+        prometheus::simpleapi::saver.set_delay(std::chrono::seconds(10));
     }
 }
 
@@ -632,7 +634,8 @@ void NodeService::terminate()
     memset(_publicIdStr, 0, ZT_IDENTITY_STRING_BUFFER_LENGTH);
     memset(_secretIdStr, 0, ZT_IDENTITY_STRING_BUFFER_LENGTH);
     _interfacePrefixBlacklist.clear();
-    _events->disable();
+    // Events stay enabled until the service thread has torn the node down so
+    // that ZTS_EVENT_NODE_DOWN is delivered
     _phy.whack();
 }
 
