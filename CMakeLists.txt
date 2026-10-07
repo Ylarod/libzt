@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.5)
 project(zt)
 find_package(Threads)
 
@@ -766,7 +766,21 @@ if(BUILD_HOST_SELFTEST)
     target_link_libraries(selftest-c ${STATIC_LIB_NAME})
     project(TEST)
     enable_testing()
+    # Requires Internet access (public roots)
     add_test(NAME selftest-c COMMAND selftest-c)
+    set_tests_properties(selftest-c PROPERTIES LABELS "network" TIMEOUT 600)
+    if(NOT BUILD_WIN)
+        # Offline: uses locally signed root sets and ad-hoc networks
+        add_executable(coretest-c ${PROJ_DIR}/test/coretest.c)
+        target_link_libraries(coretest-c ${STATIC_LIB_NAME})
+        add_test(NAME coretest-c COMMAND coretest-c)
+        set_tests_properties(coretest-c PROPERTIES LABELS "offline" TIMEOUT 300)
+        # Offline: two local nodes, one acting as the root for the other
+        add_executable(twonode-c ${PROJ_DIR}/test/twonode.c)
+        target_link_libraries(twonode-c ${STATIC_LIB_NAME})
+        add_test(NAME twonode-c COMMAND twonode-c)
+        set_tests_properties(twonode-c PROPERTIES LABELS "offline" TIMEOUT 330 SKIP_RETURN_CODE 77)
+    endif()
 endif()
 
 # ------------------------------------------------------------------------------

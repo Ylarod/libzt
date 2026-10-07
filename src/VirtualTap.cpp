@@ -81,7 +81,7 @@ VirtualTap::VirtualTap(
     , _net_id(net_id)
     , _phy(this, false, true)
 {
-    OSUtils::ztsnprintf(vtap_full_name, VTAP_NAME_LEN, "libzt-vtap-%llx", _net_id);
+    OSUtils::ztsnprintf(vtap_full_name, VTAP_NAME_LEN, "libzt-vtap-%llx", (unsigned long long)_net_id);
 #ifndef __WINDOWS__
     ::pipe(_shutdownSignalPipe);
 #endif

@@ -3,6 +3,7 @@
  */
 
 #include <ZeroTierSockets.h>
+#include <arpa/inet.h>
 #include <assert.h>
 #include <limits.h>
 #include <math.h>
@@ -797,7 +798,7 @@ void api_value_arg_test(int tid, uint8_t num, int8_t i8, int16_t i16, int32_t i3
             assert(zts_bsd_gethostbyname(NULL) == NULL);
             break;
         case 170:
-            assert(zts_dns_set_server(i8, null_addr) == ZTS_ERR_SERVICE);
+            assert(zts_dns_set_server(i8, (const zts_ip_addr*)null_addr) == ZTS_ERR_SERVICE);
             break;
         case 171:
             assert(zts_dns_get_server(i8) == NULL);
@@ -1135,7 +1136,7 @@ void test_server_socket_usage(uint16_t port4, uint16_t port6)
     clock_gettime(CLOCK_MONOTONIC, &start);
     do {
         DEBUG_INFO("server4: accepting...");
-        acc4 = zts_bsd_accept(s4, &in4, &addrlen4);
+        acc4 = zts_bsd_accept(s4, (struct zts_sockaddr*)&in4, &addrlen4);
         zts_util_delay(250);
         clock_gettime(CLOCK_MONOTONIC, &now);
         time_diff = (now.tv_sec - start.tv_sec);
@@ -1198,7 +1199,7 @@ void test_server_socket_usage(uint16_t port4, uint16_t port6)
     clock_gettime(CLOCK_MONOTONIC, &start);
     do {
         DEBUG_INFO("server6: accepting...");
-        acc6 = zts_bsd_accept(s6, &in6, &addrlen6);
+        acc6 = zts_bsd_accept(s6, (struct zts_sockaddr*)&in6, &addrlen6);
         zts_util_delay(250);
         clock_gettime(CLOCK_MONOTONIC, &now);
         time_diff = (now.tv_sec - start.tv_sec);
@@ -1748,12 +1749,19 @@ void test_start_sequences()
 
 #define NUM_THREADS 2
 
+void* test_pre_service_fuzz_thread(void* arg)
+{
+    test_pre_service_fuzz();
+    return NULL;
+}
+
 int test_thread_safety()
 {
     DEBUG_INFO("\n\n***\ttest_thread_safety");
     pthread_t threads[NUM_THREADS];
     for (int i = 0; i < NUM_THREADS; i++) {
-        int res = pthread_create(&threads[i], NULL, test_pre_service_fuzz, (void*)NULL);
+        int res = pthread_create(&threads[i], NULL, test_pre_service_fuzz_thread, (void*)NULL);
+        assert(res == 0);
     }
     for (int i = 0; i < NUM_THREADS; i++) {
         pthread_join(threads[i], NULL);

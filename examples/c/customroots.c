@@ -9,6 +9,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 void print_peer_details(const char* msg, zts_peer_info_t* d)
 {

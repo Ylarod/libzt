@@ -190,6 +190,7 @@ NodeService::NodeService()
     , _portMapper((PortMapper*)0)
 #endif
     , _allowSecondaryPort(true)
+    , _lowBandwidthMode(false)
     , _allowNetworkCaching(true)
     , _allowPeerCaching(true)
     , _allowIdentityCaching(true)
@@ -250,7 +251,10 @@ NodeService::ReasonForTermination NodeService::run()
             cb.eventCallback = SnodeEventCallback;
             cb.pathCheckFunction = SnodePathCheckFunction;
             cb.pathLookupFunction = SnodePathLookupFunction;
-            _node = new Node(this, (void*)0, &cb, OSUtils::now());
+            struct ZT_Node_Config config;
+            config.enableEncryptedHello = 0;
+            config.lowBandwidthMode = _lowBandwidthMode ? 1 : 0;
+            _node = new Node(this, (void*)0, &config, &cb, OSUtils::now());
         }
 
         unsigned int minPort = (_randomPortRangeStart ? _randomPortRangeStart : 20000);
@@ -332,7 +336,7 @@ NodeService::ReasonForTermination NodeService::run()
                             uniqueName,
                             sizeof(uniqueName),
                             "ZeroTier/%.10llx@%u",
-                            _node->address(),
+                            (unsigned long long)_node->address(),
                             _ports[2]);
                         _portMapper = new PortMapper(_ports[2], uniqueName);
                     }
@@ -340,6 +344,9 @@ NodeService::ReasonForTermination NodeService::run()
             }
         }
 #endif
+
+        _nodeId = _node->address();
+        sendEventToUser(ZTS_EVENT_NODE_UP, NULL);
 
         // Join existing networks in networks.d
         if (_allowNetworkCaching) {
@@ -359,9 +366,7 @@ NodeService::ReasonForTermination NodeService::run()
         int64_t lastTapMulticastGroupCheck = 0;
         int64_t lastBindRefresh = 0;
         int64_t lastCleanedPeersDb = 0;
-        int64_t lastLocalInterfaceAddressCheck =
-            (clockShouldBe - ZT_LOCAL_INTERFACE_CHECK_INTERVAL) + 15000;   // do this in 15s to give portmapper time to
-        int64_t lastOnline = OSUtils::now();
+        int64_t lastOnline = clockShouldBe;
         for (;;) {
             _run_m.lock();
             if (! _run) {
@@ -385,21 +390,25 @@ NodeService::ReasonForTermination NodeService::run()
                 restarted = true;
             }
 
-            // If secondary port is not configured to a constant value and we've been offline for a while,
-            // bind a new secondary port. This is a workaround for a "coma" issue caused by buggy NATs that stop
-            // working on one port after a while.
-            if (_node->online()) {
-                lastOnline = now;
-            }
-            else if ((_secondaryPort == 0) && ((now - lastOnline) > ZT_PATH_HEARTBEAT_PERIOD)) {
-                _secondaryPort = _getRandomPort(minPort, maxPort);
-                lastBindRefresh = 0;
-            }
-
             // Refresh bindings in case device's interfaces have changed,
             // and also sync routes to update any shadow routes (e.g. shadow
             // default)
-            if (((now - lastBindRefresh) >= ZT_BINDER_REFRESH_PERIOD) || (restarted)) {
+            if (((now - lastBindRefresh)
+                 >= (_node->bondController()->inUse() ? ZT_BINDER_REFRESH_PERIOD / 4 : ZT_BINDER_REFRESH_PERIOD))
+                || (restarted)) {
+                // If secondary port is not configured to a constant value and we've been offline for a while,
+                // bind a new secondary port. This is a workaround for a "coma" issue caused by buggy NATs that stop
+                // working on one port after a while.
+                if (_allowSecondaryPort && (_secondaryPort == 0)) {
+                    if (_node->online()) {
+                        lastOnline = now;
+                    }
+                    else if (((now - lastOnline) > (ZT_PEER_PING_PERIOD * 2)) || restarted) {
+                        lastOnline = now;   // don't keep changing the port before we have a chance to connect
+                        _ports[1] = _getRandomPort(minPort, maxPort);
+                    }
+                }
+
                 lastBindRefresh = now;
                 unsigned int p[3] = { 0 };
                 unsigned int pc = 0;
@@ -411,6 +420,23 @@ NodeService::ReasonForTermination NodeService::run()
                 if (! _forceTcpRelay) {
                     // Only bother binding UDP ports if we aren't forcing TCP-relay mode
                     _binder.refresh(_phy, p, pc, explicitBind, *this);
+                }
+
+                // Sync information about physical network interfaces
+                _node->clearLocalInterfaceAddresses();
+#ifdef ZT_USE_MINIUPNPC
+                if (_portMapper) {
+                    std::vector<InetAddress> mappedAddresses(_portMapper->get());
+                    for (std::vector<InetAddress>::const_iterator ext(mappedAddresses.begin());
+                         ext != mappedAddresses.end();
+                         ++ext) {
+                        _node->addLocalInterfaceAddress(reinterpret_cast<const struct sockaddr_storage*>(&(*ext)));
+                    }
+                }
+#endif
+                std::vector<InetAddress> boundAddrs(_binder.allBoundLocalInterfaceAddresses());
+                for (std::vector<InetAddress>::const_iterator i(boundAddrs.begin()); i != boundAddrs.end(); ++i) {
+                    _node->addLocalInterfaceAddress(reinterpret_cast<const struct sockaddr_storage*>(&(*i)));
                 }
             }
 
@@ -467,27 +493,6 @@ NodeService::ReasonForTermination NodeService::run()
                 }
             }
 
-            // Sync information about physical network interfaces
-            if ((now - lastLocalInterfaceAddressCheck) >= ZT_LOCAL_INTERFACE_CHECK_INTERVAL) {
-                lastLocalInterfaceAddressCheck = now;
-
-                _node->clearLocalInterfaceAddresses();
-
-#ifdef ZT_USE_MINIUPNPC
-                if (_portMapper) {
-                    std::vector<InetAddress> mappedAddresses(_portMapper->get());
-                    for (std::vector<InetAddress>::const_iterator ext(mappedAddresses.begin());
-                         ext != mappedAddresses.end();
-                         ++ext)
-                        _node->addLocalInterfaceAddress(reinterpret_cast<const struct sockaddr_storage*>(&(*ext)));
-                }
-#endif
-
-                std::vector<InetAddress> boundAddrs(_binder.allBoundLocalInterfaceAddresses());
-                for (std::vector<InetAddress>::const_iterator i(boundAddrs.begin()); i != boundAddrs.end(); ++i)
-                    _node->addLocalInterfaceAddress(reinterpret_cast<const struct sockaddr_storage*>(&(*i)));
-            }
-
             // Clean peers.d periodically
             if ((now - lastCleanedPeersDb) >= 3600000) {
                 lastCleanedPeersDb = now;
@@ -505,6 +510,43 @@ NodeService::ReasonForTermination NodeService::run()
         Mutex::Lock _l(_termReason_m);
         _termReason = ONE_UNRECOVERABLE_ERROR;
         _fatalErrorMessage = std::string("unexpected exception in main thread: ") + e.what();
+    }
+    catch (int e) {
+        // The core throws ZT_EXCEPTION_* codes as plain integers
+        Mutex::Lock _l(_termReason_m);
+        _termReason = ONE_UNRECOVERABLE_ERROR;
+        switch (e) {
+            case ZT_EXCEPTION_OUT_OF_BOUNDS:
+                _fatalErrorMessage = "out of bounds exception";
+                break;
+            case ZT_EXCEPTION_OUT_OF_MEMORY:
+                _fatalErrorMessage = "out of memory";
+                break;
+            case ZT_EXCEPTION_PRIVATE_KEY_REQUIRED:
+                _fatalErrorMessage = "private key required";
+                break;
+            case ZT_EXCEPTION_INVALID_ARGUMENT:
+                _fatalErrorMessage = "invalid argument";
+                break;
+            case ZT_EXCEPTION_INVALID_IDENTITY:
+                _fatalErrorMessage = "invalid identity";
+                break;
+            case ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_TYPE:
+                _fatalErrorMessage = "invalid serialized data: invalid type";
+                break;
+            case ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW:
+                _fatalErrorMessage = "invalid serialized data: overflow";
+                break;
+            case ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN:
+                _fatalErrorMessage = "invalid serialized data: invalid cryptographic token";
+                break;
+            case ZT_EXCEPTION_INVALID_SERIALIZED_DATA_BAD_ENCODING:
+                _fatalErrorMessage = "invalid serialized data: bad encoding";
+                break;
+            default:
+                _fatalErrorMessage = "unexpected exception code: " + std::to_string(e);
+                break;
+        }
     }
     catch (...) {
         Mutex::Lock _l(_termReason_m);
@@ -898,7 +940,7 @@ int NodeService::nodeVirtualNetworkConfigFunction(
                             sizeof(nlcpath),
                             "%s" ZT_PATH_SEPARATOR_S "networks.d" ZT_PATH_SEPARATOR_S "%.16llx.local.conf",
                             _homePath.c_str(),
-                            net_id);
+                            (unsigned long long)net_id);
                         OSUtils::rm(nlcpath);
                     }
                 }
@@ -916,12 +958,21 @@ void NodeService::nodeEventCallback(enum ZT_Event event, const void* metaData)
     ZTS_UNUSED_ARG(metaData);
 
     int event_code = 0;
-    _nodeIsOnline = (event == ZT_EVENT_ONLINE) ? true : false;
+    // Only online/offline transitions change the online state; other events
+    // (e.g. traces or user messages) must not reset it
+    if (event == ZT_EVENT_ONLINE) {
+        _nodeIsOnline = true;
+    }
+    else if (event == ZT_EVENT_OFFLINE || event == ZT_EVENT_DOWN) {
+        _nodeIsOnline = false;
+    }
     _nodeId = _node ? _node->address() : 0x0;
 
     switch (event) {
         case ZT_EVENT_UP:
-            event_code = ZTS_EVENT_NODE_UP;
+            // Posted from within the Node constructor, before _node is assigned
+            // and before any ports are bound. ZTS_EVENT_NODE_UP is sent from
+            // run() once the node ID and ports are known.
             break;
         case ZT_EVENT_ONLINE:
             event_code = ZTS_EVENT_NODE_ONLINE;
@@ -972,7 +1023,7 @@ void NodeService::sendEventToUser(unsigned int zt_event_code, const void* obj, u
             nd->ver_minor = ZEROTIER_ONE_VERSION_MINOR;
             nd->ver_rev = ZEROTIER_ONE_VERSION_REVISION;
             nd->port_primary = _primaryPort;
-            nd->port_secondary = _secondaryPort;
+            nd->port_secondary = _ports[1];
             nd->port_tertiary = _tertiaryPort;
             objptr = (void*)nd;
             break;
@@ -1055,10 +1106,29 @@ void NodeService::sendEventToUser(unsigned int zt_event_code, const void* obj, u
         case ZTS_EVENT_PEER_PATH_DISCOVERED:
         case ZTS_EVENT_PEER_PATH_DEAD: {
             pr = new zts_peer_info_t();
-            ZT_Peer* peer = (ZT_Peer*)obj;
-            memcpy(pr, peer, sizeof(zts_peer_info_t));
-            for (unsigned int j = 0; j < peer->pathCount; j++) {
-                native_ss_to_zts_ss(&(pr->paths[j].address), &(peer->paths[j].address));
+            // ZT_Peer and zts_peer_info_t do not share a memory layout, so
+            // convert field by field
+            const ZT_Peer* peer = (const ZT_Peer*)obj;
+            pr->peer_id = peer->address;
+            pr->ver_major = peer->versionMajor;
+            pr->ver_minor = peer->versionMinor;
+            pr->ver_rev = peer->versionRev;
+            pr->latency = peer->latency;
+            pr->role = (zts_peer_role_t)peer->role;
+            pr->path_count = std::min(peer->pathCount, (unsigned int)ZTS_MAX_PEER_NETWORK_PATHS);
+            pr->unused_0 = peer->isBonded;
+            for (unsigned int j = 0; j < pr->path_count; j++) {
+                const ZT_PeerPhysicalPath* src = &(peer->paths[j]);
+                zts_path_t* dst = &(pr->paths[j]);
+                native_ss_to_zts_ss(&(dst->address), &(src->address));
+                dst->last_tx = src->lastSend;
+                dst->last_rx = src->lastReceive;
+                dst->trusted_path_id = src->trustedPathId;
+                dst->latency = src->latencyMean;
+                // Points into the peer list which is freed after this call
+                dst->ifname = NULL;
+                dst->expired = src->expired;
+                dst->preferred = src->preferred;
             }
             objptr = (void*)pr;
             break;
@@ -1240,7 +1310,7 @@ void NodeService::releaseLock() const
 bool NodeService::networkIsReady(uint64_t net_id) const
 {
     if (! net_id) {
-        return ZTS_ERR_ARG;
+        return false;
     }
     Mutex::Lock _l(_nets_m);
     std::map<uint64_t, NetworkState>::const_iterator n(_nets.find(net_id));
@@ -1528,7 +1598,7 @@ void NodeService::nodeStatePutFunction(
     enum ZT_StateObjectType type,
     const uint64_t id[2],
     const void* data,
-    unsigned int len)
+    int len)
 {
     char p[1024] = { 0 };
     FILE* f;
@@ -1889,7 +1959,7 @@ int NodeService::nodePathCheckFunction(
     return 1;
 }
 
-int NodeService::nodePathLookupFunction(uint64_t ztaddr, unsigned int family, struct sockaddr_storage* result)
+int NodeService::nodePathLookupFunction(uint64_t ztaddr, int family, struct sockaddr_storage* result)
 {
     const Hashtable<uint64_t, std::vector<InetAddress> >* lh = (const Hashtable<uint64_t, std::vector<InetAddress> >*)0;
     if (family < 0) {
@@ -2188,7 +2258,9 @@ int NodeService::setLowBandwidthMode(bool enabled)
     if (_run) {
         return ZTS_ERR_SERVICE;
     }
-    _node->setLowBandwidthMode(enabled);
+    // The node does not exist until run() is called, so store the setting
+    // and apply it via ZT_Node_Config when the node is created
+    _lowBandwidthMode = enabled;
     return ZTS_ERR_OK;
 }
 

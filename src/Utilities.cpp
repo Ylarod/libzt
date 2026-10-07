@@ -15,7 +15,7 @@
 
 #include "ZeroTierSockets.h"
 
-#include <node/C25519.hpp>
+#include <node/ECC.hpp>
 #include <node/World.hpp>
 #include <osdep/OSUtils.hpp>
 
@@ -81,23 +81,23 @@ int zts_util_sign_root_set(
     // Generate signing keys
     std::string previous, current;
     if ((! OSUtils::readFile("previous.c25519", previous)) || (! OSUtils::readFile("current.c25519", current))) {
-        C25519::Pair np(C25519::generate());
+        ECC::Pair np(ECC::generate());
         previous = std::string();
-        previous.append((const char*)np.pub.data, ZT_C25519_PUBLIC_KEY_LEN);
-        previous.append((const char*)np.priv.data, ZT_C25519_PRIVATE_KEY_LEN);
+        previous.append((const char*)np.pub.data, ZT_ECC_PUBLIC_KEY_SET_LEN);
+        previous.append((const char*)np.priv.data, ZT_ECC_PRIVATE_KEY_SET_LEN);
         current = previous;
     }
-    if ((previous.length() != (ZT_C25519_PUBLIC_KEY_LEN + ZT_C25519_PRIVATE_KEY_LEN))
-        || (current.length() != (ZT_C25519_PUBLIC_KEY_LEN + ZT_C25519_PRIVATE_KEY_LEN))) {
+    if ((previous.length() != (ZT_ECC_PUBLIC_KEY_SET_LEN + ZT_ECC_PRIVATE_KEY_SET_LEN))
+        || (current.length() != (ZT_ECC_PUBLIC_KEY_SET_LEN + ZT_ECC_PRIVATE_KEY_SET_LEN))) {
         // Previous.c25519 or current.c25519 empty or invalid
         return ZTS_ERR_ARG;
     }
-    C25519::Pair previousKP;
-    memcpy(previousKP.pub.data, previous.data(), ZT_C25519_PUBLIC_KEY_LEN);
-    memcpy(previousKP.priv.data, previous.data() + ZT_C25519_PUBLIC_KEY_LEN, ZT_C25519_PRIVATE_KEY_LEN);
-    C25519::Pair currentKP;
-    memcpy(currentKP.pub.data, current.data(), ZT_C25519_PUBLIC_KEY_LEN);
-    memcpy(currentKP.priv.data, current.data() + ZT_C25519_PUBLIC_KEY_LEN, ZT_C25519_PRIVATE_KEY_LEN);
+    ECC::Pair previousKP;
+    memcpy(previousKP.pub.data, previous.data(), ZT_ECC_PUBLIC_KEY_SET_LEN);
+    memcpy(previousKP.priv.data, previous.data() + ZT_ECC_PUBLIC_KEY_SET_LEN, ZT_ECC_PRIVATE_KEY_SET_LEN);
+    ECC::Pair currentKP;
+    memcpy(currentKP.pub.data, current.data(), ZT_ECC_PUBLIC_KEY_SET_LEN);
+    memcpy(currentKP.priv.data, current.data() + ZT_ECC_PUBLIC_KEY_SET_LEN, ZT_ECC_PRIVATE_KEY_SET_LEN);
 
     // Set up roots definition
     std::vector<World::Root> roots;
@@ -136,9 +136,9 @@ int zts_util_sign_root_set(
     memcpy(roots_out, (char*)outtmp.data(), outtmp.size());
     *roots_len = outtmp.size();
     memcpy(prev_key, previous.data(), previous.length());
-    *prev_key_len = ZT_C25519_PRIVATE_KEY_LEN + ZT_C25519_PUBLIC_KEY_LEN;
+    *prev_key_len = ZT_ECC_PRIVATE_KEY_SET_LEN + ZT_ECC_PUBLIC_KEY_SET_LEN;
     memcpy(curr_key, current.data(), current.length());
-    *curr_key_len = ZT_C25519_PRIVATE_KEY_LEN + ZT_C25519_PUBLIC_KEY_LEN;
+    *curr_key_len = ZT_ECC_PRIVATE_KEY_SET_LEN + ZT_ECC_PUBLIC_KEY_SET_LEN;
     return ZTS_ERR_OK;
 }
 

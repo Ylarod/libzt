@@ -216,8 +216,11 @@ int zts_addr_compute_6plane(const uint64_t net_id, const uint64_t node_id, struc
         return ZTS_ERR_ARG;
     }
     InetAddress _6planeAddr = InetAddress::makeIpv66plane(net_id, node_id);
-    struct sockaddr_in6* in6 = (struct sockaddr_in6*)addr;
-    memcpy(in6->sin6_addr.s6_addr, _6planeAddr.rawIpData(), sizeof(struct in6_addr));
+    memset(addr, 0, sizeof(struct zts_sockaddr_storage));
+    struct zts_sockaddr_in6* in6 = (struct zts_sockaddr_in6*)addr;
+    in6->sin6_len = sizeof(struct zts_sockaddr_in6);
+    in6->sin6_family = ZTS_AF_INET6;
+    memcpy(&(in6->sin6_addr), _6planeAddr.rawIpData(), sizeof(in6->sin6_addr));
     return ZTS_ERR_OK;
 }
 
@@ -227,8 +230,11 @@ int zts_addr_compute_rfc4193(const uint64_t net_id, const uint64_t node_id, stru
         return ZTS_ERR_ARG;
     }
     InetAddress _rfc4193Addr = InetAddress::makeIpv6rfc4193(net_id, node_id);
-    struct sockaddr_in6* in6 = (struct sockaddr_in6*)addr;
-    memcpy(in6->sin6_addr.s6_addr, _rfc4193Addr.rawIpData(), sizeof(struct in6_addr));
+    memset(addr, 0, sizeof(struct zts_sockaddr_storage));
+    struct zts_sockaddr_in6* in6 = (struct zts_sockaddr_in6*)addr;
+    in6->sin6_len = sizeof(struct zts_sockaddr_in6);
+    in6->sin6_family = ZTS_AF_INET6;
+    memcpy(&(in6->sin6_addr), _rfc4193Addr.rawIpData(), sizeof(in6->sin6_addr));
     return ZTS_ERR_OK;
 }
 
@@ -479,13 +485,13 @@ ZTS_API int ZTCALL zts_net_get_mac_str(uint64_t net_id, char* dst, unsigned int 
     OSUtils::ztsnprintf(
         dst,
         ZTS_MAC_ADDRSTRLEN,
-        "%x:%x:%x:%x:%x:%x",
-        (mac >> 40) & 0xFF,
-        (mac >> 32) & 0xFF,
-        (mac >> 24) & 0xFF,
-        (mac >> 16) & 0xFF,
-        (mac >> 8) & 0xFF,
-        (mac >> 0) & 0xFF);
+        "%02x:%02x:%02x:%02x:%02x:%02x",
+        (unsigned int)((mac >> 40) & 0xFF),
+        (unsigned int)((mac >> 32) & 0xFF),
+        (unsigned int)((mac >> 24) & 0xFF),
+        (unsigned int)((mac >> 16) & 0xFF),
+        (unsigned int)((mac >> 8) & 0xFF),
+        (unsigned int)((mac >> 0) & 0xFF));
     return ZTS_ERR_OK;
 }
 
@@ -567,6 +573,9 @@ int zts_node_start()
     // Start callback thread
     int res = ZTS_ERR_OK;
     if (zts_events->hasCallback()) {
+        // Must be set before the thread starts since Events::run() exits as
+        // soon as it observes this state cleared (with an empty queue)
+        zts_events->setState(ZTS_STATE_CALLBACKS_RUNNING);
 #if defined(__WINDOWS__)
         HANDLE callbackThread = CreateThread(NULL, 0, cbRun, NULL, 0, NULL);
         // TODO: Check success
@@ -581,7 +590,6 @@ int zts_node_start()
             zts_events->clrState(ZTS_STATE_CALLBACKS_RUNNING);
             zts_events->clrCallback();
         }
-        zts_events->setState(ZTS_STATE_CALLBACKS_RUNNING);
     }
     // Start ZeroTier service
 #if defined(__WINDOWS__)

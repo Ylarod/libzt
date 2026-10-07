@@ -41,8 +41,6 @@
 #define ZT_IF_METRIC 5000
 // How often to check for new multicast subscriptions on a tap device
 #define ZT_TAP_CHECK_MULTICAST_INTERVAL 5000
-// How often to check for local interface addresses
-#define ZT_LOCAL_INTERFACE_CHECK_INTERVAL 60000
 
 // Attempt to engage TCP fallback after this many ms of no reply to packets sent to global-scope IPs
 #define ZT_TCP_FALLBACK_AFTER 30000
@@ -254,6 +252,9 @@ class NodeService {
 #endif
     bool _allowSecondaryPort;
 
+    /** Applied to ZT_Node_Config when the node is created */
+    bool _lowBandwidthMode;
+
     uint8_t _allowNetworkCaching;
     uint8_t _allowPeerCaching;
     uint8_t _allowIdentityCaching;
@@ -375,7 +376,7 @@ class NodeService {
     /** Set the node's identity */
     int setIdentity(const char* keypair, unsigned int len);
 
-    void nodeStatePutFunction(enum ZT_StateObjectType type, const uint64_t id[2], const void* data, unsigned int len);
+    void nodeStatePutFunction(enum ZT_StateObjectType type, const uint64_t id[2], const void* data, int len);
 
     int nodeStateGetFunction(enum ZT_StateObjectType type, const uint64_t id[2], void* data, unsigned int maxlen);
 
@@ -398,7 +399,7 @@ class NodeService {
 
     int nodePathCheckFunction(uint64_t ztaddr, const int64_t localSocket, const struct sockaddr_storage* remoteAddr);
 
-    int nodePathLookupFunction(uint64_t ztaddr, unsigned int family, struct sockaddr_storage* result);
+    int nodePathLookupFunction(uint64_t ztaddr, int family, struct sockaddr_storage* result);
 
     void tapFrameHandler(
         uint64_t net_id,
