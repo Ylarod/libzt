@@ -1363,6 +1363,20 @@ ZTS_API int ZTCALL zts_init_set_low_bandwidth_mode(int enabled);
 ZTS_API int ZTCALL zts_init_set_encrypted_hello(int enabled);
 
 /**
+ * @brief Enable or disable writing metrics. This is an initialization function that can
+ * only be called before `zts_node_start()`.
+ *
+ * When enabled, the ZeroTier core's metrics (packet counts, peer latency, etc.) are
+ * written every five seconds in Prometheus text format to `metrics.prom` in the storage
+ * path given to `zts_init_from_storage()`. Without a storage path nothing is written.
+ *
+ * @param enabled Whether metrics are written or not (default: false)
+ * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
+ *     experiences a problem.
+ */
+ZTS_API int ZTCALL zts_init_enable_metrics(int enabled);
+
+/**
  * @brief Set the port to which the node should bind. This is an initialization function that can
  * only be called before `zts_node_start()`.
  *
@@ -1495,7 +1509,7 @@ ZTS_API int ZTCALL zts_addr_get(uint64_t net_id, unsigned int family, struct zts
  * @param net_id Network ID
  * @param family `ZTS_AF_INET`, or `ZTS_AF_INET6`
  * @param dst Destination buffer
- * @param len Length of destination buffer (must be exactly `ZTS_IP_MAX_STR_LEN`)
+ * @param len Length of destination buffer (at least `ZTS_IP_MAX_STR_LEN`)
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
  */
@@ -1541,7 +1555,7 @@ zts_addr_compute_rfc4193(const uint64_t net_id, const uint64_t node_id, struct z
  * @param net_id Network ID
  * @param node_id Node ID
  * @param dst Destination string buffer
- * @param len Length of destination string buffer (must be exactly `ZTS_IP_MAX_STR_LEN`)
+ * @param len Length of destination string buffer (at least `ZTS_IP_MAX_STR_LEN`)
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_ARG` if invalid argument.
  */
 ZTS_API int ZTCALL zts_addr_compute_rfc4193_str(uint64_t net_id, uint64_t node_id, char* dst, unsigned int len);
@@ -1553,7 +1567,7 @@ ZTS_API int ZTCALL zts_addr_compute_rfc4193_str(uint64_t net_id, uint64_t node_i
  * @param net_id Network ID
  * @param node_id Node ID
  * @param dst Destination string buffer
- * @param len Length of destination string buffer (must be exactly `ZTS_IP_MAX_STR_LEN`)
+ * @param len Length of destination string buffer (at least `ZTS_IP_MAX_STR_LEN`)
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_ARG` if invalid argument.
  */
 ZTS_API int ZTCALL zts_addr_compute_6plane_str(uint64_t net_id, uint64_t node_id, char* dst, unsigned int len);
@@ -1631,7 +1645,7 @@ ZTS_API uint64_t ZTCALL zts_net_get_mac(uint64_t net_id);
  *
  * @param net_id Network ID
  * @param dst Destination string buffer
- * @param len Length of destination string buffer. Must be exactly `ZTS_MAC_ADDRSTRLEN`
+ * @param len Length of destination string buffer. At least `ZTS_MAC_ADDRSTRLEN`
  *
  * @return MAC address in string format
  */
@@ -1753,6 +1767,10 @@ ZTS_API int ZTCALL zts_node_get_port();
  * While the ZeroTier will stop, the stack driver (with associated
  * timers) will remain active in case future traffic processing is required.
  * To stop all activity and free all resources use `zts_free()` instead.
+ *
+ * Blocks until the node has been torn down, after which the node can be
+ * configured (`zts_init_*()`) and started again. When called from the event
+ * handler the teardown happens asynchronously after the handler returns.
  *
  * @return `ZTS_ERR_OK` if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem.
@@ -2486,7 +2504,7 @@ ZTS_API int ZTCALL zts_listen(int fd, int backlog);
  * @param fd Socket file descriptor
  * @param remote_addr Buffer that will receive remote host IP string
  * @param len Size of buffer that will receive remote host IP string
- *     (must be exactly `ZTS_IP_MAX_STR_LEN`)
+ *     (at least `ZTS_IP_MAX_STR_LEN`)
  * @param port Port number of the newly connected remote host (value-result)
  * @return New file descriptor if successful, `ZTS_ERR_SERVICE` if the node
  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument. Sets `zts_errno`

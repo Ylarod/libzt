@@ -393,12 +393,24 @@ class socket:
         return libzt.zts_get_blocking(self._fd)
 
     def getpeername(self):
-        """libzt does not support this (yet)"""
-        raise NotImplementedError("libzt does not support this (yet?)")
+        """getpeername() -> address info
+
+        Return the address of the remote endpoint: (host, port) for IPv4,
+        (host, port, flowinfo, scope_id) for IPv6"""
+        err, addr = libzt.zts_py_getpeername(self._fd)
+        if err < 0:
+            handle_error(err)
+        return addr
 
     def getsockname(self):
-        """libzt does not support this (yet)"""
-        raise NotImplementedError("libzt does not support this (yet?)")
+        """getsockname() -> address info
+
+        Return the address of the local endpoint: (host, port) for IPv4,
+        (host, port, flowinfo, scope_id) for IPv6"""
+        err, addr = libzt.zts_py_getsockname(self._fd)
+        if err < 0:
+            handle_error(err)
+        return addr
 
     def getsockopt(self, level, optname, buflen=None):
         """Get a socket option value"""
@@ -446,9 +458,15 @@ class socket:
             return None
         return data
 
-    def recvfrom(self, bufsize, flags):
-        """libzt does not support this (yet)"""
-        raise NotImplementedError("libzt does not support this (yet?)")
+    def recvfrom(self, bufsize, flags=0):
+        """recvfrom(buffersize[, flags]) -> (data, address info)
+
+        Like recv() but also return the sender's address"""
+        err, data, addr = libzt.zts_py_recvfrom(self._fd, bufsize, flags)
+        if err < 0:
+            self._handle_error(err)
+            return None
+        return data, addr
 
     def recvmsg(self, bufsize, ancbufsize, flags):
         """libzt does not support this (yet)"""
@@ -500,9 +518,18 @@ class socket:
         if err < 0:
             self._handle_error(err)
 
-    def sendto(self, n_bytes, flags, address):
-        """libzt does not support this (yet)"""
-        raise NotImplementedError("libzt does not support this (yet?)")
+    def sendto(self, data, flags_or_address, address=None):
+        """sendto(data[, flags], address) -> count
+
+        Send data to the given address (for connectionless sockets)"""
+        if address is None:
+            flags, address = 0, flags_or_address
+        else:
+            flags = flags_or_address
+        err = libzt.zts_py_sendto(self._fd, data, flags, self._family, address)
+        if err < 0:
+            self._handle_error(err)
+        return err
 
     def sendmsg(self, buffers, ancdata, flags, address):
         """libzt does not support this (yet)"""

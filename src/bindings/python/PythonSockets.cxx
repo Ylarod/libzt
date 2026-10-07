@@ -183,6 +183,100 @@ static int zts_py_tuple_to_sockaddr(int family, PyObject* addr_obj, struct zts_s
     return ZTS_ERR_ARG;
 }
 
+/* (host, port) for IPv4, (host, port, flowinfo, scope_id) for IPv6, like the
+   standard socket module. None for unknown families. */
+static PyObject* zts_py_sockaddr_to_tuple(const struct zts_sockaddr_storage* ss)
+{
+    char ipstr[ZTS_INET6_ADDRSTRLEN] = { 0 };
+    if (ss->ss_family == ZTS_AF_INET6) {
+        const struct zts_sockaddr_in6* in6 = (const struct zts_sockaddr_in6*)ss;
+        zts_inet_ntop(ZTS_AF_INET6, &(in6->sin6_addr), ipstr, sizeof(ipstr));
+        return Py_BuildValue(
+            "(siII)",
+            ipstr,
+            (int)lwip_ntohs(in6->sin6_port),
+            (unsigned int)lwip_ntohl(in6->sin6_flowinfo),
+            (unsigned int)in6->sin6_scope_id);
+    }
+    if (ss->ss_family == ZTS_AF_INET) {
+        const struct zts_sockaddr_in* in4 = (const struct zts_sockaddr_in*)ss;
+        zts_inet_ntop(ZTS_AF_INET, &(in4->sin_addr), ipstr, sizeof(ipstr));
+        return Py_BuildValue("(si)", ipstr, (int)lwip_ntohs(in4->sin_port));
+    }
+    Py_RETURN_NONE;
+}
+
+/* Returns (err, address) */
+static PyObject* zts_py_name(int fd, int peer)
+{
+    struct zts_sockaddr_storage ss;
+    memset(&ss, 0, sizeof(ss));
+    zts_socklen_t len = sizeof(ss);
+    int err = peer ? zts_bsd_getpeername(fd, (struct zts_sockaddr*)&ss, &len)
+                   : zts_bsd_getsockname(fd, (struct zts_sockaddr*)&ss, &len);
+    if (err < 0) {
+        return Py_BuildValue("(iO)", err, Py_None);
+    }
+    return Py_BuildValue("(iN)", err, zts_py_sockaddr_to_tuple(&ss));
+}
+
+PyObject* zts_py_getsockname(int fd)
+{
+    return zts_py_name(fd, 0);
+}
+
+PyObject* zts_py_getpeername(int fd)
+{
+    return zts_py_name(fd, 1);
+}
+
+/* Returns (bytes_read, data, address) */
+PyObject* zts_py_recvfrom(int fd, int len, int flags)
+{
+    if (len < 0) {
+        return Py_BuildValue("(iOO)", ZTS_ERR_ARG, Py_None, Py_None);
+    }
+    PyObject* buf = PyBytes_FromStringAndSize((char*)0, len);
+    if (buf == NULL) {
+        return NULL;
+    }
+    struct zts_sockaddr_storage ss;
+    memset(&ss, 0, sizeof(ss));
+    zts_socklen_t addrlen = sizeof(ss);
+    int bytes_read;
+    Py_BEGIN_ALLOW_THREADS;
+    bytes_read = zts_bsd_recvfrom(fd, PyBytes_AS_STRING(buf), len, flags, (struct zts_sockaddr*)&ss, &addrlen);
+    Py_END_ALLOW_THREADS;
+    if (bytes_read < 0) {
+        Py_DECREF(buf);
+        return Py_BuildValue("(iOO)", bytes_read, Py_None, Py_None);
+    }
+    if (bytes_read != len && _PyBytes_Resize(&buf, bytes_read) < 0) {
+        return NULL;
+    }
+    return Py_BuildValue("(iNN)", bytes_read, buf, zts_py_sockaddr_to_tuple(&ss));
+}
+
+int zts_py_sendto(int fd, PyObject* bytes, int flags, int family, PyObject* addr_obj)
+{
+    struct zts_sockaddr_storage addrbuf;
+    int addrlen;
+    if (zts_py_tuple_to_sockaddr(family, addr_obj, (struct zts_sockaddr*)&addrbuf, &addrlen) != ZTS_ERR_OK) {
+        return ZTS_ERR_ARG;
+    }
+    Py_buffer output;
+    if (PyObject_GetBuffer(bytes, &output, PyBUF_SIMPLE) != 0) {
+        PyErr_Clear();
+        return ZTS_ERR_ARG;
+    }
+    int bytes_sent;
+    Py_BEGIN_ALLOW_THREADS;
+    bytes_sent = zts_bsd_sendto(fd, output.buf, output.len, flags, (struct zts_sockaddr*)&addrbuf, addrlen);
+    Py_END_ALLOW_THREADS;
+    PyBuffer_Release(&output);
+    return bytes_sent;
+}
+
 /* Returns (fd, host, port) */
 PyObject* zts_py_accept(int fd)
 {

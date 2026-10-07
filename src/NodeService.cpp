@@ -23,6 +23,7 @@
 
 #include "Events.hpp"
 #include "InetAddress.hpp"
+#include "Metrics.hpp"
 #include "Mutex.hpp"
 #include "Node.hpp"
 #include "Utilities.hpp"
@@ -192,6 +193,7 @@ NodeService::NodeService()
     , _allowSecondaryPort(true)
     , _lowBandwidthMode(false)
     , _encryptedHello(false)
+    , _metricsEnabled(false)
     , _allowNetworkCaching(true)
     , _allowPeerCaching(true)
     , _allowIdentityCaching(true)
@@ -202,6 +204,27 @@ NodeService::NodeService()
     , _homePath("")
     , _events(NULL)
 {
+    configureMetrics(false, "");
+}
+
+/**
+ * The core's global prometheus saver thread runs from static initialization on
+ * and wakes up every 1/100 of its period (1s by default, i.e. 100 times per
+ * second) even when metrics are disabled. When disabled, lengthen the period to
+ * save power; destroying the saver at exit then waits up to 300ms.
+ */
+void NodeService::configureMetrics(bool enabled, const std::string& homePath)
+{
+    if (enabled && ! homePath.empty()) {
+        prometheus::simpleapi::saver.set_delay(std::chrono::seconds(5));
+        prometheus::simpleapi::saver.set_out_file(homePath + ZT_PATH_SEPARATOR_S + "metrics.prom");
+        prometheus::simpleapi::saver.set_registry(prometheus::simpleapi::registry_ptr);
+    }
+    else {
+        std::shared_ptr<prometheus::Registry> none;
+        prometheus::simpleapi::saver.set_registry(none);
+        prometheus::simpleapi::saver.set_delay(std::chrono::seconds(30));
+    }
 }
 
 NodeService::~NodeService()
@@ -239,6 +262,9 @@ NodeService::ReasonForTermination NodeService::run()
                 }
             }
         }
+
+        // Like upstream (1.16.1+), metrics are only written if enabled
+        configureMetrics(_metricsEnabled, _homePath);
 
         // Set callbacks for ZT Node
         {
@@ -575,6 +601,7 @@ NodeService::ReasonForTermination NodeService::run()
     }
     delete _node;
     _node = (Node*)0;
+    configureMetrics(false, "");
     return _termReason;
 }
 
@@ -2282,6 +2309,16 @@ int NodeService::setEncryptedHello(bool enabled)
     return ZTS_ERR_OK;
 }
 
+int NodeService::setMetricsEnabled(bool enabled)
+{
+    Mutex::Lock _lr(_run_m);
+    if (_run) {
+        return ZTS_ERR_SERVICE;
+    }
+    _metricsEnabled = enabled;
+    return ZTS_ERR_OK;
+}
+
 int NodeService::addInterfacePrefixToBlacklist(const char* prefix, unsigned int len)
 {
     if (! prefix || len == 0 || len > 15) {
@@ -2315,7 +2352,7 @@ uint64_t NodeService::getMACAddress(uint64_t net_id) const
 
 int NodeService::getNetworkName(uint64_t net_id, char* dst, unsigned int len) const
 {
-    if (net_id == 0 || ! dst || len != ZTS_MAX_NETWORK_SHORT_NAME_LENGTH) {
+    if (net_id == 0 || ! dst || len < ZTS_MAX_NETWORK_SHORT_NAME_LENGTH) {
         return ZTS_ERR_ARG;
     }
     Mutex::Lock _lr(_run_m);
@@ -2332,6 +2369,9 @@ int NodeService::getNetworkName(uint64_t net_id, char* dst, unsigned int len) co
     }
     auto netState = n->second;
     strncpy(dst, netState.config.name, ZTS_MAX_NETWORK_SHORT_NAME_LENGTH);
+    if (len > ZTS_MAX_NETWORK_SHORT_NAME_LENGTH) {
+        dst[ZTS_MAX_NETWORK_SHORT_NAME_LENGTH] = 0;
+    }
     return ZTS_ERR_OK;
 }
 

@@ -103,6 +103,9 @@ class Events {
      */
     void run();
 
+    /** Whether the calling thread is the one delivering events to the user */
+    static bool isCallbackThread();
+
     /**
      * Enable callback event processing
      */

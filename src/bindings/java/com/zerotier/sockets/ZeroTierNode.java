@@ -155,6 +155,20 @@ public class ZeroTierNode {
     }
 
     /**
+     * (Optional) Write metrics in Prometheus text format to metrics.prom in
+     * the storage path every five seconds. Note that this is an
+     * initialization method that can only be called before {@code start()}.
+     *
+     * @param enabled Whether metrics are written
+     *
+     * @return return
+     */
+    public int initEnableMetrics(boolean enabled)
+    {
+        return ZeroTierNative.zts_init_enable_metrics(enabled ? 1 : 0);
+    }
+
+    /**
      * (Optional) Set the event handler function. Note that this is an
      * initialization method that can only be called before {@code start()}.
      *

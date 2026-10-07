@@ -539,6 +539,12 @@ Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1set_1encrypted_1hello(JNIEnv
 }
 
 JNIEXPORT jint JNICALL
+Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1enable_1metrics(JNIEnv* jenv, jclass clazz, jint enabled)
+{
+    return zts_init_enable_metrics(enabled);
+}
+
+JNIEXPORT jint JNICALL
 Java_com_zerotier_sockets_ZeroTierNative_zts_1init_1from_1memory(JNIEnv* jenv, jobject thisObj, char* key, int len)
 {
     return ZTS_ERR_OK;

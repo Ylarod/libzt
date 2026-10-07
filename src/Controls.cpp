@@ -22,6 +22,7 @@
 #include "Signals.hpp"
 #include "VirtualTap.hpp"
 
+#include <atomic>
 #include <string.h>
 
 using namespace ZeroTier;
@@ -53,6 +54,27 @@ Events* zts_events;
 
 extern Mutex events_m;
 Mutex service_m;
+
+// Set from zts_node_start() until the service thread has completely torn down
+// the node (deleted the service and disabled events)
+static std::atomic<bool> service_thread_active(false);
+
+/**
+ * Wait for the service thread to finish, so that zts_init_*() calls after
+ * zts_node_stop() configure a new service instead of the dying one. Not
+ * possible from the callback thread: the teardown needs the event lock that is
+ * held while the user's callback runs, so stopping from there stays
+ * asynchronous.
+ */
+static void wait_for_service_thread()
+{
+    if (Events::isCallbackThread()) {
+        return;
+    }
+    for (int i = 0; i < 3000 && service_thread_active.load(); i++) {
+        zts_util_delay(10);
+    }
+}
 
 int init_subsystems()
 {
@@ -166,6 +188,12 @@ int zts_init_set_encrypted_hello(int enabled)
     return zts_service->setEncryptedHello(enabled);
 }
 
+int zts_init_enable_metrics(int enabled)
+{
+    ACQUIRE_SERVICE_OFFLINE();
+    return zts_service->setMetricsEnabled(enabled);
+}
+
 int zts_init_set_port(unsigned short port)
 {
     ACQUIRE_SERVICE_OFFLINE();
@@ -246,7 +274,7 @@ int zts_addr_compute_rfc4193(const uint64_t net_id, const uint64_t node_id, stru
 
 int zts_addr_compute_rfc4193_str(uint64_t net_id, uint64_t node_id, char* dst, unsigned int len)
 {
-    if (! net_id || ! node_id || ! dst || len != ZTS_IP_MAX_STR_LEN) {
+    if (! net_id || ! node_id || ! dst || len < ZTS_IP_MAX_STR_LEN) {
         return ZTS_ERR_ARG;
     }
     struct zts_sockaddr_storage ss;
@@ -261,7 +289,7 @@ int zts_addr_compute_rfc4193_str(uint64_t net_id, uint64_t node_id, char* dst, u
 
 int zts_addr_compute_6plane_str(uint64_t net_id, uint64_t node_id, char* dst, unsigned int len)
 {
-    if (! net_id || ! node_id || ! dst || len != ZTS_IP_MAX_STR_LEN) {
+    if (! net_id || ! node_id || ! dst || len < ZTS_IP_MAX_STR_LEN) {
         return ZTS_ERR_ARG;
     }
     struct zts_sockaddr_storage ss;
@@ -565,6 +593,7 @@ void* _runNodeService(void* arg)
     }
     catch (...) {
     }
+    service_thread_active = false;
 #ifndef __WINDOWS__
     pthread_exit(0);
 #endif
@@ -598,18 +627,28 @@ int zts_node_start()
         }
     }
     // Start ZeroTier service
+    service_thread_active = true;
 #if defined(__WINDOWS__)
     HANDLE serviceThread = CreateThread(NULL, 0, _runNodeService, (void*)NULL, 0, NULL);
-    // TODO: Check success
+    if (serviceThread == NULL) {
+        res = ZTS_ERR_GENERAL;
+    }
 #else
     pthread_t service_thread;
-    if ((res = pthread_create(&service_thread, NULL, _runNodeService, (void*)NULL)) != 0) {}
+    if ((res = pthread_create(&service_thread, NULL, _runNodeService, (void*)NULL)) != 0) {
+        res = ZTS_ERR_GENERAL;
+    }
+    else {
+        pthread_detach(service_thread);
+    }
 #endif
 #if defined(__linux__)
     // pthread_setname_np(service_thread, ZTS_SERVICE_THREAD_NAME);
 #endif
     if (res != ZTS_ERR_OK) {
+        service_thread_active = false;
         zts_events->clrState(ZTS_STATE_NODE_RUNNING);
+        return res;
     }
     zts_events->setState(ZTS_STATE_NODE_RUNNING);
     return ZTS_ERR_OK;
@@ -635,9 +674,13 @@ int zts_node_get_port()
 
 int zts_node_stop()
 {
-    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
-    zts_events->clrState(ZTS_STATE_NODE_RUNNING);
-    zts_service->terminate();
+    {
+        ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
+        zts_events->clrState(ZTS_STATE_NODE_RUNNING);
+        zts_service->terminate();
+    }
+    // The service lock must not be held, the teardown needs it
+    wait_for_service_thread();
 #if defined(__WINDOWS__)
     WSACleanup();
 #endif
@@ -646,10 +689,15 @@ int zts_node_stop()
 
 int zts_node_free()
 {
-    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
-    zts_events->setState(ZTS_STATE_FREE_CALLED);
-    zts_events->clrState(ZTS_STATE_NODE_RUNNING);
-    zts_service->terminate();
+    {
+        ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
+        zts_events->setState(ZTS_STATE_FREE_CALLED);
+        zts_events->clrState(ZTS_STATE_NODE_RUNNING);
+        zts_service->terminate();
+    }
+    // Previously zts_events was deleted below while the service thread could
+    // still use it
+    wait_for_service_thread();
 #if defined(__WINDOWS__)
     WSACleanup();
 #endif

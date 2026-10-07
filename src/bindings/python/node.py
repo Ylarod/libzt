@@ -61,6 +61,10 @@ class ZeroTierNode:
         """Encrypt HELLO packets (ZeroTier 1.16+ peers only)"""
         return libzt.zts_init_set_encrypted_hello(int(enabled))
 
+    def init_enable_metrics(self, enabled):
+        """Write metrics (Prometheus text format) to metrics.prom in the storage path"""
+        return libzt.zts_init_enable_metrics(int(enabled))
+
     def node_start(self):
         """Start the ZeroTier service"""
         return libzt.zts_node_start()

@@ -723,6 +723,11 @@ SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_set_encrypted_hello(int enabled)
     return zts_init_set_encrypted_hello(enabled);
 }
 
+SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_enable_metrics(int enabled)
+{
+    return zts_init_enable_metrics(enabled);
+}
+
 SWIGEXPORT int SWIGSTDCALL CSharp_zts_init_allow_net_cache(int jarg1)
 {
     int jresult;

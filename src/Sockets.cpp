@@ -465,7 +465,7 @@ int zts_accept(int fd, char* remote_addr, int len, unsigned short* port)
     if (! transport_ok()) {
         return ZTS_ERR_SERVICE;
     }
-    if (len != ZTS_INET6_ADDRSTRLEN) {
+    if (len < ZTS_INET6_ADDRSTRLEN) {
         return ZTS_ERR_ARG;
     }
     zts_sockaddr_storage ss;
@@ -524,7 +524,7 @@ int zts_getpeername(int fd, char* remote_addr_str, int len, unsigned short* port
     if (! transport_ok()) {
         return ZTS_ERR_SERVICE;
     }
-    if (len != ZTS_INET6_ADDRSTRLEN) {
+    if (len < ZTS_INET6_ADDRSTRLEN) {
         return ZTS_ERR_ARG;
     }
     struct zts_sockaddr_storage ss;
@@ -542,7 +542,7 @@ int zts_getsockname(int fd, char* local_addr_str, int len, unsigned short* port)
     if (! transport_ok()) {
         return ZTS_ERR_SERVICE;
     }
-    if (len != ZTS_INET6_ADDRSTRLEN) {
+    if (len < ZTS_INET6_ADDRSTRLEN) {
         return ZTS_ERR_ARG;
     }
     struct zts_sockaddr_storage ss;
@@ -933,7 +933,7 @@ int zts_get_keepalive(int fd)
 int zts_util_ntop(struct zts_sockaddr* addr, zts_socklen_t addrlen, char* dst_str, int len, unsigned short* port)
 {
     if (! addr || addrlen < sizeof(struct zts_sockaddr_in) || addrlen > sizeof(struct zts_sockaddr_storage) || ! dst_str
-        || len != ZTS_INET6_ADDRSTRLEN) {
+        || len < ZTS_INET6_ADDRSTRLEN) {
         return ZTS_ERR_ARG;
     }
     if (addr->sa_family == ZTS_AF_INET) {

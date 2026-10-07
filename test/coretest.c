@@ -204,6 +204,16 @@ static void test_identity_and_addressing()
             sizeof(ipstr))
         == ZTS_ERR_OK);
     CHECK(! strcmp(ipstr, "FDFF:7D0:BB8:0:99:9375:F354:3094"));
+
+    // Larger buffers are fine (used to require exactly ZTS_IP_MAX_STR_LEN),
+    // smaller ones are rejected
+    char big[128];
+    memset(big, 'x', sizeof(big));
+    CHECK(zts_addr_compute_6plane_str(0xff07d00bb8000000ULL, 0x75f3543094ULL, big, sizeof(big)) == ZTS_ERR_OK);
+    CHECK(! strcmp(big, "FC47:7D0:B75:F354:3094::1"));
+    CHECK(
+        zts_addr_compute_rfc4193_str(0xff07d00bb8000000ULL, 0x75f3543094ULL, ipstr, ZTS_IP_MAX_STR_LEN - 1)
+        == ZTS_ERR_ARG);
 }
 
 static void test_sign_root_set()
@@ -330,6 +340,10 @@ static uint64_t test_custom_roots_hello(int encrypted_hello)
     node_path(storage, sizeof(storage), "node1");
     REQUIRE(zts_init_set_low_bandwidth_mode(1) == ZTS_ERR_OK);
     REQUIRE(zts_init_set_encrypted_hello(encrypted_hello) == ZTS_ERR_OK);
+    // Metrics only for the second run, which uses the same storage
+    REQUIRE(zts_init_enable_metrics(encrypted_hello) == ZTS_ERR_OK);
+    char metrics_path[1200] = { 0 };
+    snprintf(metrics_path, sizeof(metrics_path), "%s/metrics.prom", storage);
     start_node(storage, NULL, roots, roots_len);
 
     uint64_t node_id = zts_node_get_id();
@@ -358,6 +372,7 @@ static uint64_t test_custom_roots_hello(int encrypted_hello)
     // Settings can no longer be changed
     CHECK(zts_init_set_low_bandwidth_mode(0) == ZTS_ERR_SERVICE);
     CHECK(zts_init_set_encrypted_hello(! encrypted_hello) == ZTS_ERR_SERVICE);
+    CHECK(zts_init_enable_metrics(! encrypted_hello) == ZTS_ERR_SERVICE);
     CHECK(zts_init_set_roots(roots, roots_len) == ZTS_ERR_SERVICE);
 
     // Wait for a HELLO addressed to our fake root
@@ -420,6 +435,16 @@ static uint64_t test_custom_roots_hello(int encrypted_hello)
     // The fake root never answers so the node can't be online
     CHECK(zts_node_is_online() == 0);
 
+    // Metrics are written every 5s in Prometheus text format, and only if
+    // enabled
+    if (encrypted_hello) {
+        WAIT_FOR(test_file_contains(metrics_path, "zt_packet"), 15000);
+        CHECK(test_file_contains(metrics_path, "zt_packet{"));
+    }
+    else {
+        CHECK(! test_file_exists(metrics_path));
+    }
+
     test_stop_node();
 
     char path[1200] = { 0 };
@@ -428,6 +453,35 @@ static uint64_t test_custom_roots_hello(int encrypted_hello)
     snprintf(path, sizeof(path), "%s/identity.public", storage);
     CHECK(test_file_exists(path));
     return node_id;
+}
+
+/**
+ * Restart right after zts_node_stop() with another identity, several times.
+ * The new settings must reach the new node: zts_node_stop() used to return
+ * before the old service was torn down, so they could be applied to the dying
+ * instance and lost.
+ */
+static void test_immediate_restart()
+{
+    TEST_BEGIN("test_immediate_restart");
+
+    char root_key[ZTS_ID_STR_BUF_LEN] = { 0 };
+    unsigned int root_key_len = ZTS_ID_STR_BUF_LEN;
+    REQUIRE(zts_id_new(root_key, &root_key_len) == ZTS_ERR_OK);
+    char roots[ZTS_STORE_DATA_LEN] = { 0 };
+    unsigned int roots_len = 0;
+    REQUIRE(test_make_roots(root_key, "192.0.2.1/9993", TEST_WORLD_ID, roots, &roots_len) == ZTS_ERR_OK);
+
+    for (int i = 0; i < 3; i++) {
+        char key[ZTS_ID_STR_BUF_LEN] = { 0 };
+        unsigned int key_len = ZTS_ID_STR_BUF_LEN;
+        REQUIRE(zts_id_new(key, &key_len) == ZTS_ERR_OK);
+        start_node(NULL, key, roots, roots_len);
+        CHECK(zts_node_get_id() == test_id_from_key(key));
+        CHECK(node_up_info.node_id == test_id_from_key(key));
+        CHECK(zts_node_stop() == ZTS_ERR_OK);
+    }
+    CHECK(zts_node_stop() == ZTS_ERR_SERVICE);
 }
 
 static void test_identity_persistence(uint64_t expected_id)
@@ -672,6 +726,7 @@ int main(int argc, char** argv)
     // Same storage, so the same identity
     CHECK(test_custom_roots_hello(1) == node_id);
     test_identity_persistence(node_id);
+    test_immediate_restart();
     test_adhoc_networks();
 
     return test_summary("coretest");

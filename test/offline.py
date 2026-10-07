@@ -214,6 +214,13 @@ def run_single(work_dir):
 
     s = libzt.socket(libzt.ZTS_AF_INET6, libzt.ZTS_SOCK_DGRAM, 0)
     s.bind((ip6, ADHOC_START + 1))
+    name = s.getsockname()
+    check(
+        len(name) == 4
+        and ipaddress.ip_address(name[0]) == ipaddress.ip_address(ip6)
+        and name[1] == ADHOC_START + 1,
+        "getsockname() %r" % (name,),
+    )
 
     # select() timeouts (this used the CPython private _PyTime API)
     t0 = time.monotonic()
@@ -289,7 +296,12 @@ def run_peer(work_dir, role):
     if not join_adhoc(node, events, net_id):
         return summary(role)
 
+    def same_ip(addr, ip):
+        return addr is not None and ipaddress.ip_address(addr[0]) == ipaddress.ip_address(ip)
+
     if role == "a":
+        udp = libzt.socket(libzt.ZTS_AF_INET6, libzt.ZTS_SOCK_DGRAM, 0)
+        udp.bind((ip6_a, ADHOC_START + 2))
         srv = libzt.socket(libzt.ZTS_AF_INET6, libzt.ZTS_SOCK_STREAM, 0)
         srv.bind((ip6_a, ADHOC_START + 1))
         srv.listen(1)
@@ -298,6 +310,8 @@ def run_peer(work_dir, role):
             ipaddress.ip_address(addr) == ipaddress.ip_address(ip6_b),
             "[a] accepted IPv6 peer address " + addr,
         )
+        check(same_ip(conn.getpeername(), ip6_b), "[a] getpeername() %r" % (conn.getpeername(),))
+        check(conn.getsockname()[1] == ADHOC_START + 1, "[a] getsockname() %r" % (conn.getsockname(),))
         data = recv_exactly(conn, len(PAYLOAD))
         check(data == PAYLOAD, "[a] received payload (%d bytes)" % len(data))
         conn.sendall(data)
@@ -305,6 +319,22 @@ def run_peer(work_dir, role):
         check(conn.recv(1) == b"", "[a] client closed")
         conn.close()
         srv.close()
+
+        # UDP echo until the client says bye
+        udp.settimeout(30)
+        echoed = 0
+        while True:
+            try:
+                data, peer = udp.recvfrom(1500)
+            except TimeoutError:
+                break
+            if data == b"bye":
+                break
+            check(same_ip(peer, ip6_b), "[a] recvfrom() sender %r" % (peer,))
+            udp.sendto(data, peer)
+            echoed += 1
+        check(echoed > 0, "[a] echoed UDP datagrams")
+        udp.close()
     else:
         c = libzt.socket(libzt.ZTS_AF_INET6, libzt.ZTS_SOCK_STREAM, 0)
         deadline = time.monotonic() + 60
@@ -319,10 +349,32 @@ def run_peer(work_dir, role):
                 time.sleep(0.5)
                 c = libzt.socket(libzt.ZTS_AF_INET6, libzt.ZTS_SOCK_STREAM, 0)
         c.settimeout(30)
+        check(same_ip(c.getpeername(), ip6_a), "[b] getpeername() %r" % (c.getpeername(),))
+        check(same_ip(c.getsockname(), ip6_b), "[b] getsockname() %r" % (c.getsockname(),))
         c.sendall(PAYLOAD)
         data = recv_exactly(c, len(PAYLOAD))
         check(data == PAYLOAD, "[b] echoed payload (%d bytes)" % len(data))
         c.close()
+
+        # UDP round trip, datagrams may be lost so retry
+        udp = libzt.socket(libzt.ZTS_AF_INET6, libzt.ZTS_SOCK_DGRAM, 0)
+        udp.bind((ip6_b, ADHOC_START + 3))
+        udp.settimeout(1)
+        reply = None
+        for i in range(20):
+            msg = b"ping %d" % i
+            check(udp.sendto(msg, (ip6_a, ADHOC_START + 2)) == len(msg), "[b] sendto()")
+            try:
+                reply, peer = udp.recvfrom(1500)
+            except TimeoutError:
+                continue
+            check(reply == msg, "[b] UDP echo %r" % (reply,))
+            check(same_ip(peer, ip6_a) and peer[1] == ADHOC_START + 2, "[b] recvfrom() sender %r" % (peer,))
+            break
+        check(reply is not None, "[b] got a UDP reply")
+        for _ in range(3):
+            udp.sendto(b"bye", 0, (ip6_a, ADHOC_START + 2))
+        udp.close()
 
     node.node_stop()
     return summary(role)

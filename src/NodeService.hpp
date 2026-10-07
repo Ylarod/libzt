@@ -255,6 +255,7 @@ class NodeService {
     /** Applied to ZT_Node_Config when the node is created */
     bool _lowBandwidthMode;
     bool _encryptedHello;
+    bool _metricsEnabled;
 
     uint8_t _allowNetworkCaching;
     uint8_t _allowPeerCaching;
@@ -463,6 +464,12 @@ class NodeService {
 
     /** Enable or disable encrypted HELLO packets (hides the identity and version from observers) */
     int setEncryptedHello(bool enabled);
+
+    /** Write the core's Prometheus metrics to metrics.prom in the home path */
+    int setMetricsEnabled(bool enabled);
+
+    /** Apply the metrics setting to the core's global metrics saver */
+    static void configureMetrics(bool enabled, const std::string& homePath);
 
     /** Add Interface prefix to blacklist (prevents ZeroTier from using that interface) */
     int addInterfacePrefixToBlacklist(const char* prefix, unsigned int len);

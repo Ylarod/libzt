@@ -146,6 +146,12 @@ namespace ZeroTier.Core
             return zts_init_set_encrypted_hello(Convert.ToByte(enabled));
         }
 
+        /// <summary>Write metrics (Prometheus text format) to metrics.prom in the storage path</summary>
+        public int InitEnableMetrics(bool enabled)
+        {
+            return zts_init_enable_metrics(Convert.ToByte(enabled));
+        }
+
         void OnZeroTierEvent(IntPtr msgPtr)
         {
             zts_event_msg_t msg = (zts_event_msg_t)Marshal.PtrToStructure(msgPtr, typeof(zts_event_msg_t));
@@ -651,6 +657,9 @@ namespace ZeroTier.Core
 
         [DllImport("libzt", EntryPoint = "CSharp_zts_init_set_encrypted_hello")]
         static extern int zts_init_set_encrypted_hello(int arg1);
+
+        [DllImport("libzt", EntryPoint = "CSharp_zts_init_enable_metrics")]
+        static extern int zts_init_enable_metrics(int arg1);
 
         // Core query API
 

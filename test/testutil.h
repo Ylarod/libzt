@@ -78,16 +78,32 @@ static int test_file_exists(const char* path)
     return stat(path, &st) == 0;
 }
 
+static int test_file_contains(const char* path, const char* needle)
+{
+    FILE* f = fopen(path, "rb");
+    if (! f) {
+        return 0;
+    }
+    static char buf[256 * 1024];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    return strstr(buf, needle) != NULL;
+}
+
 /**
- * zts_node_stop() only signals the service thread. The service object is torn
- * down asynchronously and events are disabled immediately, so there is no
- * completion signal to wait for. Give the teardown time to finish before the
- * next zts_init_*() call, otherwise it could configure the dying instance.
+ * zts_node_stop() returns once the node has been torn down, so the next
+ * zts_init_*() call configures a new instance (previously it could still
+ * reach the dying one).
  */
 static void test_stop_node()
 {
+    long long t0 = test_now_ms();
     CHECK(zts_node_stop() == ZTS_ERR_OK);
-    zts_util_delay(3000);
+    printf("zts_node_stop() took %lld ms\n", test_now_ms() - t0);
+    // The service is gone
+    CHECK(zts_node_get_id() == (uint64_t)ZTS_ERR_SERVICE);
+    CHECK(zts_node_stop() == ZTS_ERR_SERVICE);
 }
 
 /**
