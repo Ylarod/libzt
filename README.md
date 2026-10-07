@@ -17,7 +17,7 @@ P2P cross-platform encrypted sockets library using ZeroTier
 
 <img alt="latest libzt version" src="https://img.shields.io/github/v/tag/zerotier/libzt?label=latest"/></a>
 <a href="https://github.com/zerotier/libzt/commits/main"><img alt="Last Commit" src="https://img.shields.io/github/last-commit/zerotier/libzt"/></a>
-<a href="https://github.com/zerotier/libzt/actions"><img alt="Build Status (master branch)" src="https://img.shields.io/github/actions/workflow/status/zerotier/libzt/selftest.yml?branch=main"/></a>
+<a href="https://github.com/zerotier/libzt/actions"><img alt="Build Status (master branch)" src="https://img.shields.io/github/actions/workflow/status/zerotier/libzt/ci.yml?branch=main"/></a>
 </div>
 
 | Language/Platform | Install | Version | Example |
@@ -77,6 +77,18 @@ Example output:
     ├── libzt.a
     └── libzt.dylib
 ```
+
+Language packages are built from `pkg/`: Python wheels with `pip wheel pkg/pypi`, the Rust crate with `cargo build` in `pkg/crate/libzt`, the Android AAR with `./build.sh android-aar`, and the Apple xcframework with `pkg/apple/build-xcframework.sh` (requires [XcodeGen](https://github.com/yonaskolb/XcodeGen)).
+
+# Tests
+
+```
+cmake -S . -B build && cmake --build build
+cd build && ctest -L offline   # hermetic, needs no Internet access
+ctest -L network               # talks to the public ZeroTier roots
+```
+
+The offline tests sign their own root sets and use ad-hoc networks, so nodes come online and exchange traffic without a controller. The Python binding has an equivalent test, `python3 test/offline.py`, run against an installed wheel. [CI](./.github/workflows/ci.yml) runs all of these on Linux and macOS and builds the JAR, AAR and NuGet packages.
 
 Important directories:
 
