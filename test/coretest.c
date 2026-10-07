@@ -601,6 +601,8 @@ static void test_adhoc_networks()
     CHECK(zts_node_get_id() == node_id);
     WAIT_FOR(zts_node_is_online(), 15000);
     REQUIRE(zts_node_is_online());
+    // Events are delivered asynchronously by the callback thread
+    WAIT_FOR(atomic_load(&ev_node_online), 5000);
     CHECK(atomic_load(&ev_node_online));
 
     uint64_t net_a = zts_net_compute_adhoc_id(ADHOC_A_START, ADHOC_A_END);
@@ -609,6 +611,7 @@ static void test_adhoc_networks()
     CHECK(zts_net_join(net_a) == ZTS_ERR_OK);
     WAIT_FOR(atomic_load(&ev_net_ready_ip6), 30000);
     REQUIRE(atomic_load(&ev_net_ready_ip6));
+    WAIT_FOR(atomic_load(&ev_addr_added_ip6), 5000);
     CHECK(atomic_load(&ev_addr_added_ip6));
     // Previously returned true for an invalid network ID
     CHECK(zts_net_transport_is_ready(0) == 0);
