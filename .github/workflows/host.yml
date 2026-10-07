@@ -34,7 +34,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --parallel 4 --target zt-static zt-shared
 
-      # libzt-<platform>/{include,lib,LICENSE.txt}
+      # libzt-<platform>/{include,lib,LICENSE.txt}. Windows: zt.lib (static),
+      # zt-shared.dll with its import library zt-shared.lib
       - name: Package
         run: |
           pkg=libzt-${{ matrix.platform }}
@@ -42,7 +43,7 @@ jobs:
           cp include/ZeroTierSockets.h $pkg/include/
           cp LICENSE.txt $pkg/
           find build/lib -maxdepth 2 -type f \
-            \( -name 'libzt.*' -o -name 'zt-static.lib' -o -name 'zt-shared.*' \) \
+            \( -name 'libzt.*' -o -name 'zt.lib' -o -name 'zt-shared.*' \) \
             ! -name '*.exp' ! -name '*.ilk' -exec cp {} $pkg/lib/ \;
           ls -l $pkg/lib
           test -n "$(ls $pkg/lib)"
