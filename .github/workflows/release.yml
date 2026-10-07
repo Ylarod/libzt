@@ -96,15 +96,27 @@ jobs:
             version="0.0.0-${GITHUB_SHA::7}"
           fi
           mkdir assets
+          # Exactly one file per artifact and pattern (artifacts may keep
+          # their directory layout)
+          one() {
+            local files
+            files=$(find "artifacts/$1" -type f -name "$2")
+            if [ "$(echo "$files" | grep -c .)" != 1 ]; then
+              echo "::error::Expected one $2 in $1, found: $files" >&2
+              exit 1
+            fi
+            echo "$files"
+          }
           for p in linux-x64 linux-arm64 macos-arm64; do
-            cp artifacts/libzt-$p/libzt-$p.tar.gz assets/libzt-$version-$p.tar.gz
+            cp "$(one libzt-$p 'libzt-*.tar.gz')" assets/libzt-$version-$p.tar.gz
           done
-          cp artifacts/libzt-windows-x64/libzt-windows-x64.zip assets/libzt-$version-windows-x64.zip
-          cp artifacts/libzt-xcframework/zt.xcframework.zip assets/libzt-$version.xcframework.zip
-          cp artifacts/libzt-android-aar/libzt-release.aar assets/libzt-$version.aar
-          cp artifacts/libzt-jar/*.jar assets/
-          cp artifacts/libzt-nuget/*.nupkg assets/
-          cp artifacts/libzt-wheels-*/*.whl assets/
+          cp "$(one libzt-windows-x64 'libzt-*.zip')" assets/libzt-$version-windows-x64.zip
+          cp "$(one libzt-xcframework zt.xcframework.zip)" assets/libzt-$version.xcframework.zip
+          cp "$(one libzt-android-aar '*.aar')" assets/libzt-$version.aar
+          cp "$(one libzt-jar '*.jar')" assets/libzt-$version.jar
+          cp "$(one libzt-nuget '*.nupkg')" assets/
+          find artifacts -path 'artifacts/libzt-wheels-*' -name '*.whl' -exec cp {} assets/ \;
+          test -n "$(ls assets/*.whl)"
           cd assets
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
@@ -113,7 +125,7 @@ jobs:
             echo '```'
             cat SHA256SUMS
             echo '```'
-            echo "Swift Package Manager checksum of the xcframework: \`$(cat ../artifacts/libzt-xcframework/zt.xcframework.zip.checksum)\`"
+            echo "Swift Package Manager checksum of the xcframework: \`$(sha256sum libzt-$version.xcframework.zip | cut -d ' ' -f 1)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # SLSA build provenance, signed with the workflow's identity
