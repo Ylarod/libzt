@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # C library and the hermetic ctest suites (label "offline": signed local
+  # root sets and ad-hoc networks, no Internet access needed)
+  native:
+    name: Native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Offline tests
+        working-directory: build
+        run: ctest -L offline --output-on-failure
+
+      # Talks to the public ZeroTier roots, may be affected by the network
+      - name: Network test
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        working-directory: build
+        run: ctest -L network --output-on-failure
+
+  python:
+    name: Python wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install cibuildwheel
+        run: python -m pip install "cibuildwheel>=3,<4"
+
+      # Same configuration as the release wheels (pkg/pypi/pyproject.toml),
+      # one interpreter only. Runs test/offline.py against the wheel.
+      - name: Build and test wheel
+        env:
+          CIBW_BUILD: cp313-*
+        run: python -m cibuildwheel pkg/pypi --output-dir wheelhouse
+
+  rust:
+    name: Rust crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and test
+        working-directory: pkg/crate/libzt
+        run: |
+          cargo build --examples
+          cargo test
+
+  jar:
+    name: Java JAR
+    uses: ./.github/workflows/jar.yaml
+
+  aar:
+    name: Android AAR
+    uses: ./.github/workflows/aar.yaml
+
+  nuget:
+    name: NuGet (Windows)
+    uses: ./.github/workflows/nuget.yml

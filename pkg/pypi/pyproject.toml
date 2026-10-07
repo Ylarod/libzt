@@ -56,3 +56,11 @@ packages = ["libzt"]
 # The C/C++ sources live outside of this directory (absolute paths in
 # SOURCES.txt), they must not be treated as package data
 include-package-data = false
+
+# Used by .github/workflows/wheels.yml (all versions) and ci.yml (one version)
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_*"
+archs = "auto64"
+# Hermetic, needs no Internet access
+test-command = "python {project}/test/offline.py"

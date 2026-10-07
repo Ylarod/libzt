@@ -10,7 +10,7 @@ function Build-Host([string]$BuildType, [string]$Arch)
 	$env:OutputDir="dist\win-$Arch-$Artifact-"+$BuildType.ToLower()
 	md $env:OutputDir -ErrorAction:'silentlycontinue'
 	pushd -Path $env:BuildDir
-	cmake $Variant -G "Visual Studio 16 2019" -A $Arch ../../
+	cmake $Variant -A $Arch ../../
 	cmake --build . --config $BuildType
 	ctest -C debug
 	popd
@@ -69,7 +69,7 @@ function Build-Library([string]$BuildType, [string]$Arch, [string]$LangBinding)
 	$env:OutputDir="dist\win-$Arch-$LangBindingPostfix-"+$BuildType.ToLower()
 	md $env:OutputDir -ErrorAction:'silentlycontinue'
 	pushd -Path $env:BuildDir
-	cmake ${OptLangBinding} -G "Visual Studio 16 2019" -A $Arch ../../
+	cmake ${OptLangBinding} -A $Arch ../../
 	cmake --build . --config $BuildType
 	popd
 	md $env:OutputDir\lib\ -ErrorAction:'silentlycontinue'
