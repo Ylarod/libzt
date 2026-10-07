@@ -3,6 +3,10 @@ name: Build Java JAR
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      retention-days:
+        type: number
+        default: 14
 
 jobs:
   build:
@@ -26,4 +30,6 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: libzt-jar
-        path: dist
+        path: dist/*-jar-release/pkg/*.jar
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days || 14 }}

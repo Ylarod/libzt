@@ -3,6 +3,10 @@ name: Build NuGet Package
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      retention-days:
+        type: number
+        default: 14
 
 env:
   BUILD_TYPE: Release
@@ -22,4 +26,6 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: libzt-nuget
-        path: dist
+        path: dist/win-x64-nuget-release/*.nupkg
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days || 14 }}

@@ -1,0 +1,60 @@
+name: Build native libraries
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      retention-days:
+        type: number
+        default: 14
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, platform: linux-x64 }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { os: macos-latest, platform: macos-arm64 }
+          - { os: windows-latest, platform: windows-x64 }
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel 4 --target zt-static zt-shared
+
+      # libzt-<platform>/{include,lib,LICENSE.txt}
+      - name: Package
+        run: |
+          pkg=libzt-${{ matrix.platform }}
+          mkdir -p $pkg/include $pkg/lib
+          cp include/ZeroTierSockets.h $pkg/include/
+          cp LICENSE.txt $pkg/
+          find build/lib -maxdepth 2 -type f \
+            \( -name 'libzt.*' -o -name 'zt-static.lib' -o -name 'zt-shared.*' \) \
+            ! -name '*.exp' ! -name '*.ilk' -exec cp {} $pkg/lib/ \;
+          ls -l $pkg/lib
+          test -n "$(ls $pkg/lib)"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip $pkg.zip $pkg > /dev/null
+          else
+            tar czf $pkg.tar.gz $pkg
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: libzt-${{ matrix.platform }}
+          path: libzt-${{ matrix.platform }}.*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days || 14 }}

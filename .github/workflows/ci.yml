@@ -41,31 +41,12 @@ jobs:
         working-directory: build
         run: ctest -L network --output-on-failure
 
-  python:
-    name: Python wheel (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.x"
-
-      - name: Install cibuildwheel
-        run: python -m pip install "cibuildwheel>=3,<4"
-
-      # Same configuration as the release wheels (pkg/pypi/pyproject.toml),
-      # one interpreter only. Runs test/offline.py against the wheel.
-      - name: Build and test wheel
-        env:
-          CIBW_BUILD: cp313-*
-        run: python -m cibuildwheel pkg/pypi --output-dir wheelhouse
+  # Same configuration as the release wheels, one interpreter only
+  wheels:
+    name: Python wheels
+    uses: ./.github/workflows/wheels.yml
+    with:
+      build: cp313-*
 
   rust:
     name: Rust crate
@@ -80,6 +61,14 @@ jobs:
         run: |
           cargo build --examples
           cargo test
+
+  host:
+    name: Native libraries
+    uses: ./.github/workflows/host.yml
+
+  xcframework:
+    name: Apple xcframework
+    uses: ./.github/workflows/xcframework.yml
 
   jar:
     name: Java JAR

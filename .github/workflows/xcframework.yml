@@ -1,0 +1,57 @@
+name: Build Apple xcframework
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      retention-days:
+        type: number
+        default: 14
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # macOS, iOS and iOS Simulator slices from pkg/apple/project.yml
+      - name: Build
+        run: pkg/apple/build-xcframework.sh Release
+
+      # Link the macOS slice into a Swift program through the Clang module
+      # (module.modulemap) and call into the library
+      - name: Test
+        run: |
+          slice=$(ls -d pkg/apple/zt.xcframework/macos-*)
+          cat > /tmp/main.swift <<'SWIFT'
+          import zt
+          let id = zts_net_compute_adhoc_id(9000, 9100)
+          precondition(id == 0xff2328238c000000, "unexpected ad-hoc network ID")
+          precondition(zts_init_set_encrypted_hello(1) == ZTS_ERR_OK.rawValue)
+          print("zt.xcframework OK")
+          SWIFT
+          swiftc -F "$slice" -framework zt -lc++ /tmp/main.swift -o /tmp/zttest
+          /tmp/zttest
+
+      - name: Package
+        working-directory: pkg/apple
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent zt.xcframework zt.xcframework.zip
+          # Checksum for a Swift Package Manager binaryTarget (equals
+          # `swift package compute-checksum`)
+          shasum -a 256 zt.xcframework.zip | cut -d ' ' -f 1 | tee zt.xcframework.zip.checksum
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: libzt-xcframework
+          path: |
+            pkg/apple/zt.xcframework.zip
+            pkg/apple/zt.xcframework.zip.checksum
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days || 14 }}

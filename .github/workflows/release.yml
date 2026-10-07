@@ -1,0 +1,142 @@
+name: Release
+
+# Pushing a version tag (e.g. 1.16.2) builds every package, attests their
+# build provenance and uploads them to a draft GitHub release, which is then
+# reviewed and published manually. Manual runs build and attest without
+# creating a release.
+#
+# Verify a downloaded file with:
+#   gh attestation verify <file> --repo <owner>/libzt
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Packages carry their own version numbers, they must match the tag
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare tag and package versions
+        if: github.ref_type == 'tag'
+        run: |
+          tag="$GITHUB_REF_NAME"
+          pypi=$(python3 -c "import tomllib; print(tomllib.load(open('pkg/pypi/pyproject.toml', 'rb'))['project']['version'])")
+          nuget=$(tr -d '[:space:]' < pkg/nuget/version.in)
+          echo "tag=$tag pypi=$pypi nuget=$nuget"
+          if [ "$pypi" != "$tag" ] || [ "$nuget" != "$tag" ]; then
+            echo "::error::Tag $tag does not match the package versions (PyPI $pypi, NuGet $nuget)"
+            exit 1
+          fi
+
+  host:
+    needs: version
+    uses: ./.github/workflows/host.yml
+    with:
+      retention-days: 90
+
+  wheels:
+    needs: version
+    uses: ./.github/workflows/wheels.yml
+    with:
+      retention-days: 90
+
+  xcframework:
+    needs: version
+    uses: ./.github/workflows/xcframework.yml
+    with:
+      retention-days: 90
+
+  jar:
+    needs: version
+    uses: ./.github/workflows/jar.yaml
+    with:
+      retention-days: 90
+
+  aar:
+    needs: version
+    uses: ./.github/workflows/aar.yaml
+    with:
+      retention-days: 90
+
+  nuget:
+    needs: version
+    uses: ./.github/workflows/nuget.yml
+    with:
+      retention-days: 90
+
+  release:
+    name: Attest and draft release
+    needs: [host, wheels, xcframework, jar, aar, nuget]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # create the release
+      id-token: write          # sign attestations (Sigstore)
+      attestations: write      # store attestations
+      artifact-metadata: write # artifact storage records
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: libzt-*
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="0.0.0-${GITHUB_SHA::7}"
+          fi
+          mkdir assets
+          for p in linux-x64 linux-arm64 macos-arm64; do
+            cp artifacts/libzt-$p/libzt-$p.tar.gz assets/libzt-$version-$p.tar.gz
+          done
+          cp artifacts/libzt-windows-x64/libzt-windows-x64.zip assets/libzt-$version-windows-x64.zip
+          cp artifacts/libzt-xcframework/zt.xcframework.zip assets/libzt-$version.xcframework.zip
+          cp artifacts/libzt-android-aar/libzt-release.aar assets/libzt-$version.aar
+          cp artifacts/libzt-jar/*.jar assets/
+          cp artifacts/libzt-nuget/*.nupkg assets/
+          cp artifacts/libzt-wheels-*/*.whl assets/
+          cd assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          {
+            echo "### Release assets"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo "Swift Package Manager checksum of the xcframework: \`$(cat ../artifacts/libzt-xcframework/zt.xcframework.zip.checksum)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # SLSA build provenance, signed with the workflow's identity
+      - uses: actions/attest@v4
+        with:
+          subject-path: assets/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: assets/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" assets/* \
+              --draft --verify-tag --generate-notes --title "libzt $GITHUB_REF_NAME"
+          fi

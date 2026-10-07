@@ -90,6 +90,14 @@ ctest -L network               # talks to the public ZeroTier roots
 
 The offline tests sign their own root sets and use ad-hoc networks, so nodes come online and exchange traffic without a controller. The Python binding has an equivalent test, `python3 test/offline.py`, run against an installed wheel. [CI](./.github/workflows/ci.yml) runs all of these on Linux and macOS and builds the JAR, AAR and NuGet packages.
 
+# Releases
+
+Pushing a version tag (e.g. `1.16.2`, matching `pkg/pypi/pyproject.toml` and `pkg/nuget/version.in`) runs the [release workflow](./.github/workflows/release.yml): it builds the native libraries (Linux x64/arm64, macOS arm64, Windows x64), the Apple xcframework, Python wheels, JAR, AAR and NuGet package, records [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) for all of them and uploads them with a `SHA256SUMS` file to a draft GitHub release. Verify a downloaded file with:
+
+```
+gh attestation verify libzt-1.16.2-linux-x64.tar.gz --repo zerotier/libzt
+```
+
 Important directories:
 
 |Directory| Purpose|

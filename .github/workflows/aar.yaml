@@ -3,6 +3,10 @@ name: Build Android AAR
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      retention-days:
+        type: number
+        default: 14
 
 jobs:
   build:
@@ -25,4 +29,6 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: libzt-android-aar
-        path: dist
+        path: dist/android-any-android-release/libzt-release.aar
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days || 14 }}
